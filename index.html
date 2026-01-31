@@ -3,785 +3,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bybit Futures Pro - Ultimate Replication</title>
-    <script src="https://unpkg.com/lightweight-charts@3.8.0/dist/lightweight-charts.standalone.production.js"></script>
-    <style>
-        /* * ============================================================
-         * 1. BYBIT DESIGN SYSTEM (Exact Color Palette)
-         * ============================================================
-         */
-        :root {
-            --bg-base: #121212;
-            --bg-panel: #1e1e1e; /* Standard panel color */
-            --bg-hover: #2c2c2c;
-            --bg-input: #2b2b2b;
-            --bg-modal: #252525;
-            
-            --border-color: #333333;
-            --border-hover: #555555;
-
-            --text-primary: #EAECEF;
-            --text-secondary: #848E9C;
-            --text-tertiary: #5E6673;
-
-            --color-buy: #0ECB81;
-            --color-sell: #F6465D;
-            --color-accent: #F7A600; /* Bybit Yellow/Orange */
-            
-            --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            --font-mono: 'Roboto Mono', 'Consolas', monospace;
-
-            --shadow-modal: 0 8px 24px rgba(0,0,0,0.6);
-            --radius-sm: 4px;
-            --radius-md: 8px;
-        }
-
-        /* RESET */
-        * { margin: 0; padding: 0; box-sizing: border-box; user-select: none; outline: none; }
-        html, body { width: 100%; height: 100%; background-color: var(--bg-base); color: var(--text-primary); font-family: var(--font-stack); font-size: 12px; overflow: hidden; }
-        input, button { font-family: inherit; border: none; background: none; color: inherit; }
-        button { cursor: pointer; }
-
-        /* SCROLLBAR */
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-        ::-webkit-scrollbar-thumb:hover { background: #555; }
-
-        /* UTILS */
-        .flex { display: flex; }
-        .flex-col { display: flex; flex-direction: column; }
-        .flex-center { display: flex; align-items: center; justify-content: center; }
-        .flex-between { display: flex; align-items: center; justify-content: space-between; }
-        .flex-1 { flex: 1; min-height: 0; min-width: 0; }
-        .text-up { color: var(--color-buy) !important; }
-        .text-down { color: var(--color-sell) !important; }
-        .text-accent { color: var(--color-accent) !important; }
-        .font-num { font-family: var(--font-mono); }
-        .hidden { display: none !important; }
-
-        /* * ============================================================
-         * 2. LAYOUT STRUCTURE
-         * ============================================================
-         */
-        /* HEADER */
-        header { 
-            height: 52px; background-color: var(--bg-panel); border-bottom: 1px solid #000; 
-            padding: 0 16px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between;
-        }
-        .logo { font-size: 16px; font-weight: 900; color: #fff; display: flex; align-items: center; gap: 8px; letter-spacing: 0.5px; }
-        .logo span { color: var(--color-accent); }
-        .market-ticker { display: flex; align-items: center; margin-left: 24px; height: 32px; border-left: 1px solid var(--border-color); padding-left: 16px; gap: 20px; }
-        .mt-item { display: flex; flex-direction: column; justify-content: center; }
-        .mt-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 2px; }
-        .mt-val { font-size: 12px; font-weight: 700; font-family: var(--font-mono); }
-
-        /* MAIN GRID */
-        .layout-grid { display: flex; flex: 1; height: calc(100vh - 52px); }
-        
-        .col-chart { flex: 1; display: flex; flex-direction: column; border-right: 1px solid var(--border-color); min-width: 0; }
-        .col-ob { width: 280px; background: var(--bg-base); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; flex-shrink: 0; }
-        .col-trade { width: 320px; background: var(--bg-panel); display: flex; flex-direction: column; flex-shrink: 0; }
-
-        /* * ============================================================
-         * 3. CHART & POSITIONS (Left Panel)
-         * ============================================================
-         */
-        .chart-toolbar { height: 40px; background: var(--bg-panel); border-bottom: 1px solid var(--border-color); padding: 0 10px; display: flex; align-items: center; gap: 4px; }
-        .tf-btn { padding: 4px 10px; color: var(--text-secondary); font-weight: 600; border-radius: var(--radius-sm); transition: 0.2s; }
-        .tf-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-        .tf-btn.active { color: var(--color-accent); font-weight: 700; }
-
-        #chart-container { position: relative; flex: 1; background: #161616; cursor: crosshair; }
-        #draw-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; }
-
-        /* Drawing Floating Tools */
-        .draw-tools { position: absolute; left: 10px; top: 10px; display: flex; flex-direction: column; gap: 6px; background: #252525; padding: 4px; border-radius: 4px; z-index: 20; border: 1px solid var(--border-color); }
-        .dt-btn { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary); border-radius: 4px; cursor: pointer; }
-        .dt-btn:hover { background: var(--bg-hover); color: #fff; }
-        .dt-btn.active { color: var(--color-accent); background: rgba(247, 166, 0, 0.1); }
-
-        /* Bottom Panel */
-        .panel-btm { height: 280px; background: var(--bg-panel); border-top: 4px solid #121212; display: flex; flex-direction: column; }
-        .btm-nav { display: flex; border-bottom: 1px solid var(--border-color); background: var(--bg-base); }
-        .btm-tab { padding: 10px 20px; font-weight: 700; color: var(--text-secondary); cursor: pointer; border-top: 2px solid transparent; background: var(--bg-panel); }
-        .btm-tab.active { color: var(--text-primary); border-top-color: var(--color-accent); }
-        
-        .btm-content { flex: 1; overflow: auto; }
-        table { width: 100%; border-collapse: collapse; white-space: nowrap; }
-        th { position: sticky; top: 0; background: var(--bg-base); color: var(--text-secondary); padding: 8px 12px; font-size: 11px; text-align: left; border-bottom: 1px solid var(--border-color); }
-        td { padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-size: 12px; font-weight: 600; color: var(--text-primary); }
-        tr:hover td { background: var(--bg-hover); }
-        
-        .btn-mini { padding: 4px 8px; border: 1px solid var(--border-color); border-radius: 4px; font-size: 11px; color: var(--text-primary); transition: 0.2s; }
-        .btn-mini:hover { border-color: var(--color-accent); color: var(--color-accent); }
-
-        /* * ============================================================
-         * 4. ORDER BOOK (Middle Panel)
-         * ============================================================
-         */
-        .ob-head { padding: 8px 12px; display: flex; justify-content: space-between; color: var(--text-secondary); font-size: 11px; font-weight: 700; border-bottom: 1px solid var(--border-color); background: var(--bg-panel); }
-        .ob-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; background: #131722; }
-        .ob-row { display: flex; justify-content: space-between; padding: 1px 12px; cursor: pointer; position: relative; height: 20px; align-items: center; font-family: var(--font-mono); font-size: 12px; font-weight: 600; }
-        .ob-row:hover { background: var(--bg-hover); }
-        .bg-bar { position: absolute; top: 0; right: 0; height: 100%; opacity: 0.15; z-index: 0; transition: width 0.05s linear; }
-        .bg-ask { background: var(--color-sell); } .bg-bid { background: var(--color-buy); }
-        
-        .ob-p { z-index: 1; width: 40%; text-align: left; letter-spacing: -0.3px; }
-        .ob-q { z-index: 1; width: 30%; text-align: right; color: var(--text-primary); }
-        .ob-t { z-index: 1; width: 30%; text-align: right; color: var(--text-secondary); }
-
-        .mid-stat { height: 40px; display: flex; align-items: center; justify-content: center; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); background: var(--bg-panel); font-size: 16px; font-weight: 700; font-family: var(--font-mono); gap: 8px; }
-
-        /* * ============================================================
-         * 5. TRADE FORM (Right Panel - The Key Request)
-         * ============================================================
-         */
-        .trade-header { display: flex; gap: 15px; padding: 15px 15px 0; border-bottom: 1px solid var(--border-color); }
-        .tr-tab { padding-bottom: 10px; font-weight: 700; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; }
-        .tr-tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); }
-
-        .trade-content { padding: 15px; display: flex; flex-direction: column; gap: 14px; flex: 1; overflow-y: auto; }
-
-        /* Margin Mode Button (The Image Replication) */
-        .margin-btn-group { display: flex; gap: 8px; }
-        .margin-btn { 
-            flex: 1; height: 32px; background: var(--bg-input); border-radius: 4px; 
-            display: flex; align-items: center; justify-content: center; cursor: pointer; 
-            font-size: 12px; font-weight: 700; color: var(--text-primary); border: 1px solid transparent; transition: 0.2s;
-        }
-        .margin-btn:hover { border-color: var(--text-secondary); background: #383838; }
-        .margin-btn.mode { color: var(--text-primary); }
-        .margin-btn.lev { color: var(--text-primary); }
-
-        .inp-container { position: relative; }
-        .inp-label { display: flex; justify-content: space-between; color: var(--text-secondary); font-size: 11px; margin-bottom: 6px; }
-        .inp-box { 
-            display: flex; align-items: center; background: var(--bg-input); height: 40px; 
-            border-radius: 4px; padding: 0 10px; border: 1px solid transparent; 
-        }
-        .inp-box:focus-within { border-color: var(--color-accent); }
-        .inp-box input { flex: 1; text-align: right; color: #fff; font-weight: 700; font-size: 14px; }
-        .inp-suffix { margin-left: 8px; color: var(--text-secondary); font-weight: 700; }
-
-        /* Slider Styling */
-        input[type=range] { width: 100%; height: 4px; background: #444; border-radius: 2px; -webkit-appearance: none; cursor: pointer; margin: 15px 0 5px; }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: #fff; border-radius: 50%; border: 2px solid var(--color-accent); margin-top: -4px; box-shadow: 0 0 4px rgba(0,0,0,0.5); }
-
-        .cost-row { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-secondary); font-weight: 600; margin-top: 5px; }
-        
-        .trade-btns { display: flex; gap: 10px; margin-top: auto; }
-        .btn-trade { 
-            flex: 1; height: 44px; border-radius: 4px; font-weight: 700; font-size: 14px; 
-            color: #fff; transition: 0.1s; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1.2;
-        }
-        .btn-trade:active { transform: scale(0.98); }
-        .btn-long { background: var(--color-buy); } .btn-long:hover { filter: brightness(1.1); }
-        .btn-short { background: var(--color-sell); } .btn-short:hover { filter: brightness(1.1); }
-        .btn-sub { font-size: 10px; opacity: 0.8; font-weight: 500; }
-
-        /* * ============================================================
-         * 6. MODAL (Exact Replication of Image 1 & 2)
-         * ============================================================
-         */
-        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 1000; display: none; align-items: center; justify-content: center; backdrop-filter: blur(2px); }
-        .modal { background: var(--bg-modal); width: 400px; border-radius: 8px; padding: 24px; box-shadow: 0 16px 48px rgba(0,0,0,0.6); border: 1px solid var(--border-color); }
-        
-        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-        .modal-title { font-size: 16px; font-weight: 700; color: #fff; }
-        .modal-close { cursor: pointer; color: var(--text-secondary); font-size: 18px; }
-        
-        .margin-tabs { display: flex; background: #151515; border-radius: 4px; padding: 2px; margin-bottom: 24px; }
-        .m-tab { flex: 1; text-align: center; padding: 8px; cursor: pointer; border-radius: 4px; color: var(--text-secondary); font-weight: 700; font-size: 13px; transition: 0.2s; }
-        .m-tab.active { background: var(--bg-input); color: var(--text-primary); }
-
-        .lev-section { margin-bottom: 30px; }
-        .lev-header { display: flex; justify-content: space-between; margin-bottom: 15px; color: var(--text-secondary); font-size: 13px; }
-        .lev-input-box { background: var(--bg-input); padding: 8px 12px; border-radius: 4px; border: 1px solid var(--border-color); color: #fff; font-weight: 700; display: flex; align-items: center; width: 80px; justify-content: center; }
-        
-        /* Bybit Style Slider in Modal */
-        .lev-slider-container { position: relative; padding: 0 5px; }
-        .lev-markers { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-tertiary); margin-top: 10px; font-weight: 600; }
-        
-        .modal-btn { width: 100%; height: 44px; background: var(--color-accent); color: #1a1a1a; font-weight: 800; border-radius: 4px; font-size: 14px; transition: 0.2s; }
-        .modal-btn:hover { background: #ffc107; }
-
-        #toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 12px 24px; border-radius: 4px; z-index: 2000; font-weight: 700; border-left: 4px solid var(--color-accent); display: none; }
-    </style>
+    <title>LUNA BIT - Futures Simulator</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <header>
+        <div class="logo">LUNA BIT</div>
+        <div class="header-info">
+            <span id="balance-display">Balance: 0.00 USDT</span>
+            <span class="ticker-info">
+                <span>BTC/USDT</span>
+                <span id="current-price" class="price-up">60000.00</span>
+            </span>
+        </div>
+    </header>
 
-<header>
-    <div class="logo" onclick="resetAll()">
-        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5 9.5 9.75 12 11zm0 2.5l-5-2.5-5 2.5 10 5 10-5-5-2.5-5 2.5z"/></svg>
-        BYBIT <span>FUTURES</span>
-    </div>
-    <div class="market-ticker">
-        <div class="mt-item"><span class="mt-label">BTCUSDT</span><span class="mt-val" id="h-price">--</span></div>
-        <div class="mt-item"><span class="mt-label">24H Change</span><span class="mt-val" id="h-chg">--</span></div>
-        <div class="mt-item"><span class="mt-label">24H High</span><span class="mt-val" id="h-high">--</span></div>
-        <div class="mt-item"><span class="mt-label">24H Low</span><span class="mt-val" id="h-low">--</span></div>
-    </div>
-    <div style="flex:1"></div>
-    <div style="color:var(--text-secondary); font-weight:700;" id="clock">00:00:00</div>
-</header>
-
-<div class="layout-grid">
-    <div class="col-chart">
-        <div class="chart-toolbar">
-            <div class="tf-btn active" onclick="setTF('1')">1m</div>
-            <div class="tf-btn" onclick="setTF('5')">5m</div>
-            <div class="tf-btn" onclick="setTF('15')">15m</div>
-            <div class="tf-btn" onclick="setTF('60')">1h</div>
-            <div class="tf-btn" onclick="setTF('D')">1d</div>
-            <div style="flex:1"></div>
-            <div style="color:var(--color-buy); font-weight:700; font-size:11px;">● Real-time</div>
-        </div>
-        <div id="chart-container">
-            <div class="draw-tools">
-                <div class="dt-btn active" onclick="setTool('cursor')">➤</div>
-                <div class="dt-btn" onclick="setTool('line')">／</div>
-                <div class="dt-btn" onclick="setTool('hline')">－</div>
-                <div class="dt-btn" onclick="setTool('eraser')">✕</div>
-            </div>
-            <canvas id="draw-layer"></canvas>
-        </div>
-        <div class="panel-btm">
-            <div class="btm-nav">
-                <div class="btm-tab active">Positions</div>
-                <div class="btm-tab">Current Orders (0)</div>
-                <div class="btm-tab">Order History</div>
-            </div>
-            <div class="btm-content">
-                <table id="pos-table">
-                    <thead><tr><th>Contracts</th><th>Qty</th><th>Value</th><th>Entry Price</th><th>Mark Price</th><th>Liq. Price</th><th>Unrealized P&L (ROE)</th><th>Realized P&L</th><th>TP/SL</th><th>Close</th></tr></thead>
-                    <tbody id="pos-body"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-ob">
-        <div class="ob-head"><span>Price(USDT)</span><span>Qty(BTC)</span><span>Total</span></div>
-        <div class="ob-body">
-            <div id="asks" style="display:flex; flex-direction:column-reverse; flex:1;"></div>
-        </div>
-        <div class="mid-stat">
-            <span id="mid-price" class="text-up">--</span>
-        </div>
-        <div class="ob-body">
-            <div id="bids" style="display:flex; flex-direction:column; flex:1;"></div>
-        </div>
-    </div>
-
-    <div class="col-trade">
-        <div class="trade-header">
-            <div class="tr-tab active">Limit</div>
-            <div class="tr-tab">Market</div>
-            <div class="tr-tab">Conditional</div>
-        </div>
-        <div class="trade-content">
-            <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-secondary);">
-                <span>Available</span>
-                <span class="font-num" style="color:#fff; font-weight:700;"><span id="balance">100,000</span> USDT</span>
-            </div>
-
-            <div class="margin-btn-group">
-                <button class="margin-btn mode" id="btn-mode" onclick="openMarginModal()">Cross</button>
-                <button class="margin-btn lev" id="btn-lev" onclick="openMarginModal()">20x</button>
-            </div>
-
-            <div class="inp-container">
-                <div class="inp-label"><span>Order Price</span></div>
-                <div class="inp-box">
-                    <input type="number" id="inp-price" placeholder="Order Price">
-                    <span class="inp-suffix">USDT</span>
+    <main class="trading-layout">
+        <div class="layout-column panel-trading">
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>주문</h3>
                 </div>
-            </div>
-
-            <div class="inp-container">
-                <div class="inp-label"><span>Qty</span></div>
-                <div class="inp-box">
-                    <input type="number" id="inp-qty" oninput="syncSlider(this.value)">
-                    <span class="inp-suffix">BTC</span>
-                </div>
-            </div>
-
-            <div>
-                <input type="range" id="qty-slider" min="0" max="100" value="0" step="1" oninput="setQtyPct(this.value)">
-                <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-top:2px;"><span>0%</span><span>50%</span><span>100%</span></div>
-            </div>
-
-            <div class="cost-row">
-                <span>Order Value</span><span id="order-val">-- USDT</span>
-            </div>
-            <div class="cost-row">
-                <span>Est. Cost</span><span id="est-cost" style="color:#fff">-- USDT</span>
-            </div>
-
-            <div class="trade-btns">
-                <button class="btn-trade btn-long" onclick="openPos('long')">
-                    <span>Open Long</span>
-                </button>
-                <button class="btn-trade btn-short" onclick="openPos('short')">
-                    <span>Open Short</span>
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal-overlay" id="margin-modal">
-    <div class="modal">
-        <div class="modal-header">
-            <span class="modal-title">Adjust Leverage</span>
-            <span class="modal-close" onclick="closeModal()">✕</span>
-        </div>
-        
-        <div class="margin-tabs">
-            <div class="m-tab active" id="tab-cross" onclick="setMode('Cross')">Cross</div>
-            <div class="m-tab" id="tab-iso" onclick="setMode('Isolated')">Isolated</div>
-        </div>
-
-        <div class="lev-section">
-            <div class="lev-header">
-                <span>Leverage</span>
-                <div class="lev-input-box">
-                    <span id="modal-lev-val">20.00</span>x
-                </div>
-            </div>
-            <div class="lev-slider-container">
-                <input type="range" min="1" max="100" value="20" id="modal-slider" oninput="updateModalLev(this.value)">
-                <div class="lev-markers">
-                    <span>1x</span><span>25x</span><span>50x</span><span>75x</span><span>100x</span>
+                <div id="order-form">
+                    <div class="tabs">
+                        <button class="tab-btn active" data-order-type="limit">지정가</button>
+                        <button class="tab-btn" data-order-type="market">시장가</button>
+                    </div>
+                    <div id="limit-order-inputs" class="input-group">
+                        <label for="price">가격 (USDT)</label>
+                        <input type="number" id="price" placeholder="0.00">
+                    </div>
+                    <div class="input-group">
+                        <label for="quantity">수량 (BTC)</label>
+                        <input type="number" id="quantity" placeholder="0.00">
+                    </div>
+                    <div class="buttons">
+                        <button id="buy-btn">매수 / 롱</button>
+                        <button id="sell-btn">매도 / 숏</button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <button class="modal-btn" onclick="confirmMargin()">Confirm</button>
-    </div>
-</div>
-
-<div id="toast">Message</div>
-
-<title>LUNA BIT - Futures Simulator</title>
-</head>
-<body>
-
-<header>
-    <div class="logo" onclick="resetAll()">
-        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5 9.5 9.75 12 11zm0 2.5l-5-2.5-5 2.5 10 5 10-5-5-2.5-5 2.5z"/></svg>
-        LUNA <span>BIT</span>
-    </div>
-    <div class="market-ticker">
-        <div class="mt-item"><span class="mt-label">KRW-BTC</span><span class="mt-val" id="h-price">--</span></div>
-        <div class="mt-item"><span class="mt-label">24H Change</span><span class="mt-val" id="h-chg">--</span></div>
-        <div class="mt-item"><span class="mt-label">24H High</span><span class="mt-val" id="h-high">--</span></div>
-        <div class="mt-item"><span class="mt-label">24H Low</span><span class="mt-val" id="h-low">--</span></div>
-    </div>
-    <div style="flex:1"></div>
-    <div style="color:var(--text-secondary); font-weight:700;" id="clock">00:00:00</div>
-</header>
-
-<div class="layout-grid">
-    <div class="col-chart">
-        <div class="chart-toolbar">
-            <div class="tf-btn active" onclick="setTF('1')">1m</div>
-            <div class="tf-btn" onclick="setTF('5')">5m</div>
-            <div class="tf-btn" onclick="setTF('15')">15m</div>
-            <div class="tf-btn" onclick="setTF('60')">1h</div>
-            <div class="tf-btn" onclick="setTF('D')">1d</div>
-            <div style="flex:1"></div>
-            <div style="color:var(--color-buy); font-weight:700; font-size:11px;">● Real-time (Upbit)</div>
-        </div>
-        <div id="chart-container">
-            <div class="draw-tools">
-                <div class="dt-btn active" onclick="setTool('cursor')">➤</div>
-                <div class="dt-btn" onclick="setTool('line')">／</div>
-                <div class="dt-btn" onclick="setTool('hline')">－</div>
-                <div class="dt-btn" onclick="setTool('eraser')">✕</div>
-            </div>
-            <canvas id="draw-layer"></canvas>
-        </div>
-        <div class="panel-btm">
-            <div class="btm-nav">
-                <div class="btm-tab active">Positions</div>
-                <div class="btm-tab">Current Orders (0)</div>
-                <div class="btm-tab">Order History</div>
-            </div>
-            <div class="btm-content">
-                <table id="pos-table">
-                    <thead><tr><th>Contracts</th><th>Qty</th><th>Value</th><th>Entry Price</th><th>Mark Price</th><th>Liq. Price</th><th>Unrealized P&L (ROE)</th><th>Realized P&L</th><th>TP/SL</th><th>Close</th></tr></thead>
-                    <tbody id="pos-body"></tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-ob">
-        <div class="ob-head"><span>Price(KRW)</span><span>Qty(BTC)</span><span>Total</span></div>
-        <div class="ob-body">
-            <div id="asks" style="display:flex; flex-direction:column-reverse; flex:1;"></div>
-        </div>
-        <div class="mid-stat">
-            <span id="mid-price" class="text-up">--</span>
-        </div>
-        <div class="ob-body">
-            <div id="bids" style="display:flex; flex-direction:column; flex:1;"></div>
-        </div>
-    </div>
-
-    <div class="col-trade">
-        <div class="trade-header">
-            <div class="tr-tab active">Limit</div>
-            <div class="tr-tab">Market</div>
-            <div class="tr-tab">Conditional</div>
-        </div>
-        <div class="trade-content">
-            <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-secondary);">
-                <span>Available</span>
-                <span class="font-num" style="color:#fff; font-weight:700;"><span id="balance">100,000,000</span> KRW</span>
-            </div>
-
-            <div class="margin-btn-group">
-                <button class="margin-btn mode" id="btn-mode" onclick="openMarginModal()">Cross</button>
-                <button class="margin-btn lev" id="btn-lev" onclick="openMarginModal()">20x</button>
-            </div>
-
-            <div class="inp-container">
-                <div class="inp-label"><span>Order Price</span></div>
-                <div class="inp-box">
-                    <input type="number" id="inp-price" placeholder="Order Price">
-                    <span class="inp-suffix">KRW</span>
+        <div class="layout-column panel-data">
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>미체결 주문</h3>
+                </div>
+                <div class="table-container">
+                    <table id="orders-table">
+                        <thead>
+                            <tr>
+                                <th>유형</th>
+                                <th>가격</th>
+                                <th>수량</th>
+                                <th>주문시간</th>
+                                <th>작업</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orders-body"></tbody>
+                    </table>
                 </div>
             </div>
 
-            <div class="inp-container">
-                <div class="inp-label"><span>Qty</span></div>
-                <div class="inp-box">
-                    <input type="number" id="inp-qty" oninput="syncSlider(this.value)">
-                    <span class="inp-suffix">BTC</span>
+            <div class="panel">
+                <div class="panel-header">
+                    <h3>포지션</h3>
                 </div>
-            </div>
-
-            <div>
-                <input type="range" id="qty-slider" min="0" max="100" value="0" step="1" oninput="setQtyPct(this.value)">
-                <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text-secondary);margin-top:2px;"><span>0%</span><span>50%</span><span>100%</span></div>
-            </div>
-
-            <div class="cost-row">
-                <span>Order Value</span><span id="order-val">-- KRW</span>
-            </div>
-            <div class="cost-row">
-                <span>Est. Cost</span><span id="est-cost" style="color:#fff">-- KRW</span>
-            </div>
-
-            <div class="trade-btns">
-                <button class="btn-trade btn-long" onclick="openPos('long')">
-                    <span>Open Long</span>
-                </button>
-                <button class="btn-trade btn-short" onclick="openPos('short')">
-                    <span>Open Short</span>
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="modal-overlay" id="margin-modal">
-    <div class="modal">
-        <div class="modal-header">
-            <span class="modal-title">Adjust Leverage</span>
-            <span class="modal-close" onclick="closeModal()">✕</span>
-        </div>
-        
-        <div class="margin-tabs">
-            <div class="m-tab active" id="tab-cross" onclick="setMode('Cross')">Cross</div>
-            <div class="m-tab" id="tab-iso" onclick="setMode('Isolated')">Isolated</div>
-        </div>
-
-        <div class="lev-section">
-            <div class="lev-header">
-                <span>Leverage</span>
-                <div class="lev-input-box">
-                    <span id="modal-lev-val">20.00</span>x
-                </div>
-            </div>
-            <div class="lev-slider-container">
-                <input type="range" min="1" max="100" value="20" id="modal-slider" oninput="updateModalLev(this.value)">
-                <div class="lev-markers">
-                    <span>1x</span><span>25x</span><span>50x</span><span>75x</span><span>100x</span>
+                <div class="table-container">
+                    <table id="positions-table">
+                        <thead>
+                            <tr>
+                                <th>방향</th>
+                                <th>진입 가격</th>
+                                <th>현재 가격</th>
+                                <th>수량</th>
+                                <th>미실현 손익</th>
+                                <!-- <th>청산 가격</th> Removed for Cross Margin -->
+                                <th>작업</th>
+                            </tr>
+                        </thead>
+                        <tbody id="positions-body"></tbody>
+                    </table>
                 </div>
             </div>
         </div>
+    </main>
 
-        <button class="modal-btn" onclick="confirmMargin()">Confirm</button>
-    </div>
-</div>
-
-<div id="toast">Message</div>
-
-<script>
-    /* =========================================
-       1. CORE STATE & CONFIG
-       ========================================= */
-    const SYMBOL = "KRW-BTC";
-    
-    let state = {
-        price: 0,
-        balance: 100000000, // 1억 KRW
-        lev: 20,
-        mode: 'Cross',
-        pos: null,
-        bids: [], asks: [],
-        drawings: [],
-        tf: '1', // 1 minute default
-    };
-
-    /* =========================================
-       2. PERSISTENCE (LocalStorage)
-       ========================================= */
-    function saveState() {
-        const data = { 
-            balance: state.balance, lev: state.lev, mode: state.mode, 
-            pos: state.pos, drawings: state.drawings 
-        };
-        localStorage.setItem('luna_bit_v1', JSON.stringify(data));
-    }
-
-    function loadState() {
-        const s = localStorage.getItem('luna_bit_v1');
-        if (s) {
-            const d = JSON.parse(s);
-            state.balance = d.balance ?? 100000000;
-            state.lev = d.lev ?? 20;
-            state.mode = d.mode ?? 'Cross';
-            state.pos = d.pos ?? null;
-            state.drawings = d.drawings ?? [];
-        }
-        refreshUI();
-    }
-
-    function resetAll() {
-        if(confirm("모든 데이터를 초기화하고 시뮬레이션을 재시작하시겠습니까?")) {
-            localStorage.removeItem('luna_bit_v1');
-            location.reload();
-        }
-    }
-
-    /* =========================================
-       3. CHART ENGINE (Lightweight Charts)
-       ========================================= */
-    const chart = LightweightCharts.createChart(document.getElementById('chart-container'), {
-        layout: { backgroundColor: '#121212', textColor: '#848e9c' },
-        grid: { vertLines: { color: '#1e1e1e' }, horzLines: { color: '#1e1e1e' } },
-        timeScale: { borderColor: '#262930', timeVisible: true },
-        rightPriceScale: { borderColor: '#262930' },
-        crosshair: { mode: 0 },
-    });
-    const candleSeries = chart.addCandlestickSeries({ upColor: '#0ECB81', downColor: '#F6465D', borderVisible: false, wickUpColor: '#0ECB81', wickDownColor: '#F6465D' });
-    
-    const canvas = document.getElementById('draw-layer');
-    new ResizeObserver(e => {
-        const { width, height } = e[0].contentRect;
-        chart.applyOptions({ width, height });
-        canvas.width = width; canvas.height = height;
-        draw();
-    }).observe(document.getElementById('chart-container'));
-
-    /* =========================================
-       4. DATA LOGIC (UPBIT API)
-       ========================================= */
-    function getTfUnit(tf) {
-        if (tf === 'D') return ['days', 1];
-        if (tf === 'W') return ['weeks', 1];
-        return ['minutes', tf];
-    }
-    
-    async function fetchKlineData(market, unit, interval, count = 200) {
-        try {
-            const url = `https://api.upbit.com/v1/candles/${unit}/${interval}?market=${market}&count=${count}`;
-            const res = await fetch(url);
-            if (!res.ok) throw new Error('Upbit Kline API fetch failed');
-            const data = await res.json();
-            return data.map(d => ({ 
-                time: new Date(d.candle_date_time_utc).getTime() / 1000, 
-                open: d.opening_price, high: d.high_price, 
-                low: d.low_price, close: d.trade_price 
-            })).reverse();
-        } catch (e) {
-            console.error("Kline fetch error:", e);
-            showToast("차트 데이터 로딩 실패");
-            return [];
-        }
-    }
-    
-    async function updateRealtimeData() {
-        try {
-            const res = await fetch(`https://api.upbit.com/v1/ticker?markets=${SYMBOL}`);
-            if (!res.ok) return;
-            const data = await res.json();
-            const ticker = data[0];
-            if (!ticker) return;
-
-            const newPrice = ticker.trade_price;
-            const prevPrice = state.price;
-            state.price = newPrice;
-            
-            const lastCandle = candleSeries.dataByIndex(candleSeries.data().length - 1);
-            if (lastCandle && (new Date().getTime()/1000) < lastCandle.time + 60) {
-                 candleSeries.update({ time: lastCandle.time, open: lastCandle.open, high: Math.max(lastCandle.high, newPrice), low: Math.min(lastCandle.low, newPrice), close: newPrice });
-            }
-
-            document.getElementById('h-price').innerText = newPrice.toLocaleString();
-            document.getElementById('h-price').className = `mt-val ${newPrice >= prevPrice ? 'text-up' : 'text-down'}`;
-            document.getElementById('h-chg').innerText = (ticker.signed_change_rate * 100).toFixed(2) + '%';
-            document.getElementById('h-high').innerText = ticker.high_price.toLocaleString();
-            document.getElementById('h-low').innerText = ticker.low_price.toLocaleString();
-            
-            document.getElementById('mid-price').innerText = newPrice.toLocaleString();
-            document.getElementById('mid-price').className = newPrice >= prevPrice ? "text-up" : "text-down";
-            
-            if (state.pos) refreshUI();
-        } catch (e) {
-            console.error("Ticker fetch error:", e);
-        }
-    }
-    
-    async function init() {
-        loadState();
-        let [unit, interval] = getTfUnit(state.tf);
-        const bars = await fetchKlineData(SYMBOL, unit, interval);
-        if (bars.length > 0) {
-            candleSeries.setData(bars);
-            state.price = bars[bars.length-1].close;
-        }
-        initOB(); // Fake order book
-        
-        // Start polling for live data
-        setInterval(updateRealtimeData, 2000);
-    }
-    
-    function initOB() { /* SIMULATED ORDER BOOK */ }
-    function renderOB() { /* SIMULATED ORDER BOOK */ }
-
-    /* =========================================
-       5. MODAL LOGIC
-       ========================================= */
-    function openMarginModal() { /* ... unchanged ... */ }
-    function closeModal() { /* ... unchanged ... */ }
-    function setMode(m) { /* ... unchanged ... */ }
-    function updateModalLev(val) { /* ... unchanged ... */ }
-    function confirmMargin() { /* ... unchanged ... */ }
-
-    /* =========================================
-       6. TRADING LOGIC
-       ========================================= */
-    function setPrice(p) { document.getElementById('inp-price').value = p; calcCost(); }
-    
-    function syncSlider(val) {
-        const p = parseFloat(document.getElementById('inp-price').value) || state.price;
-        if (p === 0) return;
-        const maxQty = (state.balance * state.lev) / p;
-        const pct = (val / maxQty) * 100;
-        document.getElementById('qty-slider').value = Math.min(100, pct);
-        calcCost();
-    }
-    
-    function setQtyPct(pct) {
-        const p = parseFloat(document.getElementById('inp-price').value) || state.price;
-        if (p === 0) return;
-        const maxQty = (state.balance * state.lev) / p;
-        document.getElementById('inp-qty').value = (maxQty * (pct/100)).toFixed(3);
-        calcCost();
-    }
-    
-    function calcCost() {
-        const p = parseFloat(document.getElementById('inp-price').value) || state.price;
-        const q = parseFloat(document.getElementById('inp-qty').value) || 0;
-        const val = p * q;
-        const cost = val / state.lev;
-        
-        document.getElementById('order-val').innerText = val.toLocaleString(undefined, {maximumFractionDigits: 0}) + " KRW";
-        document.getElementById('est-cost').innerText = cost.toLocaleString(undefined, {maximumFractionDigits: 0}) + " KRW";
-    }
-
-    function openPos(side) {
-        const q = parseFloat(document.getElementById('inp-qty').value);
-        const p = parseFloat(document.getElementById('inp-price').value) || state.price;
-        if(!q) return showToast("수량을 입력하세요.");
-        
-        const cost = (p * q) / state.lev;
-        if(cost > state.balance) return showToast("자산이 부족합니다.");
-        
-        state.balance -= cost;
-        state.pos = { side, qty: q, entry: p, lev: state.lev, mode: state.mode, margin: cost, realized: -(p*q*0.0005) };
-        
-        saveState();
-        refreshUI();
-        showToast("주문이 체결되었습니다.");
-    }
-
-    function closePos() {
-        if(!state.pos) return;
-        const p = state.price;
-        const diff = (p - state.pos.entry) * (state.pos.side==='long'?1:-1);
-        const pnl = diff * state.pos.qty;
-        
-        state.balance += (state.pos.margin + pnl);
-        state.pos = null;
-        
-        saveState();
-        refreshUI();
-        showToast("포지션이 종료되었습니다.");
-    }
-
-    function refreshUI() {
-        document.getElementById('balance').innerText = Math.floor(state.balance).toLocaleString();
-        document.getElementById('btn-mode').innerText = state.mode;
-        document.getElementById('btn-lev').innerText = state.lev + 'x';
-        
-        const tbody = document.getElementById('pos-body');
-        if(!state.pos) { 
-            tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-secondary)">보유한 포지션이 없습니다.</td></tr>`;
-            return;
-        }
-        
-        const p = state.pos;
-        const cur = state.price;
-        const pnl = (cur - p.entry) * p.qty * (p.side==='long'?1:-1);
-        const roe = (pnl / p.margin) * 100;
-        const color = pnl >= 0 ? 'text-up' : 'text-down';
-        const liq = p.side==='long' ? p.entry*(1 - 1/p.lev + 0.005) : p.entry*(1 + 1/p.lev - 0.005);
-
-        tbody.innerHTML = `<tr>
-            <td><span class="${color}">${p.side.toUpperCase()}</span> ${SYMBOL}</td>
-            <td>${p.qty}</td>
-            <td>${(p.qty*cur).toLocaleString(undefined, {maximumFractionDigits:0})}</td>
-            <td>${p.entry.toLocaleString()}</td>
-            <td>${cur.toLocaleString()}</td>
-            <td class="text-accent">${liq.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
-            <td class="${color}">${pnl.toLocaleString(undefined, {maximumFractionDigits:0})} (${roe.toFixed(2)}%)</td>
-            <td>${p.realized.toLocaleString(undefined, {maximumFractionDigits:0})}</td>
-            <td>--</td>
-            <td><button class="btn-mini" onclick="closePos()">시장가 종료</button></td>
-        </tr>`;
-    }
-
-    /* =========================================
-       7. DRAWING & UTILS
-       ========================================= */
-    // Drawing functions (setTool, draw, event listeners) are complex and can be kept as is for now.
-    // Utility functions (showToast, clock) can also be kept.
-    let tool = 'cursor', isDraw = false, startPt = null;
-    function setTool(t) { /* ... unchanged ... */ }
-    function draw() { /* ... unchanged ... */ }
-    function showToast(msg) { /* ... unchanged ... */ }
-    function setTF(tf) { state.tf=tf; init(); }
-    setInterval(()=>document.getElementById('clock').innerText=new Date().toLocaleTimeString(), 1000);
-
-    // Boot
-    init();
-</script>
+    <script src="main.js"></script>
 </body>
 </html>
