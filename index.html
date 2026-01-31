@@ -46,6 +46,48 @@
         </div>
 
         <div class="layout-column panel-data">
+            
+            <div class="panel">
+              <div class="panel-header"><h3>Order Book (10)</h3></div>
+
+              <div class="ob-wrap">
+                <table class="ob-table">
+                  <thead>
+                    <tr>
+                      <th>Ask Qty</th>
+                      <th>Ask Price</th>
+                    </tr>
+                  </thead>
+                  <tbody id="asks-body"></tbody>
+                </table>
+
+                <table class="ob-table">
+                  <thead>
+                    <tr>
+                      <th>Bid Price</th>
+                      <th>Bid Qty</th>
+                    </tr>
+                  </thead>
+                  <tbody id="bids-body"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-header"><h3>Trades</h3></div>
+              <table class="ob-table">
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Side</th>
+                    <th>Price</th>
+                    <th>Qty</th>
+                  </tr>
+                </thead>
+                <tbody id="tape-body"></tbody>
+              </table>
+            </div>
+
             <div class="panel">
                 <div class="panel-header">
                     <h3>미체결 주문</h3>

@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const MMR = 0.005; // Maintenance Margin Rate (0.5%)
     const TAKER_FEE_RATE = 0.0004; // 0.04%
     const MAKER_FEE_RATE = 0.0002; // 0.02%
+    const SPREAD_BPS = 2; // 2 bps = 0.02% (2/10000) - for spread calculation
     const SYMBOL = 'BTC-USDT'; // Hardcoded symbol
 
     // Order book constants
@@ -88,7 +89,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const quantityInput = document.getElementById('quantity');
     const limitOrderInputs = document.getElementById('limit-order-inputs');
     const tabs = document.querySelectorAll('.tab-btn');
-    console.log('DOM Elements obtained:', { bidPriceEl, askPriceEl, balanceDisplayEl, ordersBodyEl, positionsBodyEl, buyBtn, sellBtn, priceInput, quantityInput, limitOrderInputs, tabs });
+    // New Order Book and Tape DOM elements
+    const asksBodyEl = document.getElementById('asks-body');
+    const bidsBodyEl = document.getElementById('bids-body');
+    const tapeBodyEl = document.getElementById('tape-body');
+
+    console.log('DOM Elements obtained:', { bidPriceEl, askPriceEl, balanceDisplayEl, ordersBodyEl, positionsBodyEl, buyBtn, sellBtn, priceInput, quantityInput, limitOrderInputs, tabs, asksBodyEl, bidsBodyEl, tapeBodyEl });
 
 
     // --- LEDGER & ACCOUNT METRICS LOGIC ---
@@ -322,6 +328,8 @@ document.addEventListener('DOMContentLoaded', () => {
             updateAccountMetrics(); // Metrics depend on current price
             renderOrders(); // Re-render orders as they might be filled
             renderPositions(); // PnL updates with price
+            renderOrderBook(); // Render order book with new data
+            renderTape(); // Render trade tape with new data
         } catch (error) {
             console.error("Error rendering price:", error);
         }
@@ -383,153 +391,90 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function renderAll() {
-        console.log('Rendering all UI components...');
-        // updateAccountMetrics is called by renderPrice and addToLedger, ensuring latest metrics
-        renderBalance();
-        renderPrice();
-        // renderOrders and renderPositions are called by renderPrice, no need to call twice
+    function levelHasMyOrders(level) {
+        return Array.isArray(level.userOrders) && level.userOrders.length > 0;
     }
 
-    // --- EXECUTE FILL FUNCTION (from user's prompt) ---
-    /**
-     * Executes a single fill for an order.
-     * @param {object} order - The order object.
-     * @param {number} fillPrice - The price at which to fill.
-     * @param {number} fillQty - The quantity to fill.
-     * @param {number} feeRate - Maker or Taker fee rate.
-     */
-    function executeFill(order, fillPrice, fillQty, feeRate) {
-        // 1) tradeId 하나만 생성
-        const tradeId = state.nextTradeId++;
+    function renderOrderBook() {
+        try {
+            if (!asksBodyEl || !bidsBodyEl) return;
 
-        // 2) 포지션 업데이트
-        const currentPosition = state.positions[order.symbol] || { side: "FLAT", qty: 0, entryPrice: 0, status: "CLOSED" };
-        const fill = { side: /** @type {Side} */(order.side), qty: fillQty, price: fillPrice };
-        const { pos: updatedPosition, realizedPnl } = applyFillNet(currentPosition, fill);
+            // Asks (낮은 가격이 위에 오게 = 지금 배열이 bestAsk부터면 그대로)
+            asksBodyEl.innerHTML = '';
+            // Sort asks from low to high price for display
+            [...state.orderBook.asks].sort((a,b) => a.price - b.price).forEach(lvl => {
+                const tr = document.createElement('tr');
+                tr.className = `ob-row ${levelHasMyOrders(lvl) ? 'ob-own' : ''}`;
+                tr.dataset.price = lvl.price;
 
-        // 3) realized pnl
-        if (realizedPnl !== 0) addToLedger('REALIZED_PNL', realizedPnl, { orderId: order.orderId, tradeId, symbol: order.symbol });
+                tr.innerHTML = `
+                <td class="ob-ask">${(+lvl.qty).toFixed(4)}</td>
+                <td class="ob-ask">${(+lvl.price).toFixed(2)}</td>
+                `;
+                asksBodyEl.appendChild(tr);
+            });
 
-        // 4) fee
-        const fee = Math.abs(fillPrice * fillQty) * feeRate;
-        if (fee !== 0) addToLedger('FEE', -fee, { orderId: order.orderId, tradeId, symbol: order.symbol });
+            // Bids (높은 가격이 위에 오게 = 지금 배열이 bestBid부터면 reverse)
+            bidsBodyEl.innerHTML = '';
+            // Sort bids from high to low price for display
+            [...state.orderBook.bids].sort((a,b) => b.price - a.price).forEach(lvl => {
+                const tr = document.createElement('tr');
+                tr.className = `ob-row ${levelHasMyOrders(lvl) ? 'ob-own' : ''}`;
+                tr.dataset.price = lvl.price;
 
-        // 5) 포지션 저장
-        if (updatedPosition.qty === 0 || updatedPosition.side === "FLAT") {
-            delete state.positions[order.symbol];
-        } else {
-            state.positions[order.symbol] = {
-                ...updatedPosition,
-                symbol: order.symbol,
-                leverage: LEVERAGE,
-                marginMode: 'CROSS',
-                status: 'OPEN',
-                updatedAt: new Date(),
-            };
-        }
-
-        // 6) 주문 업데이트
-        order.filledQty += fillQty;
-        // Check for floating point issues when comparing
-        if (order.filledQty + 1e-12 >= order.qty) { // Add a small epsilon for floating point comparison
-            order.filledQty = order.qty; // Ensure it's exactly qty
-            order.status = 'FILLED';
-        } else {
-            order.status = 'PARTIAL';
-        }
-
-        // 7) 테이프 기록
-        pushTape(order.side, fillPrice, fillQty);
-    }
-
-    /**
-     * Matches a market order against the order book, handling partial fills.
-     * @param {object} order - The market order object.
-     */
-    function fillMarketOrderUsingBook(order) {
-        let remainingFillQty = order.qty - order.filledQty;
-        if (remainingFillQty <= 1e-12) return; // Order is already filled or nearly filled
-
-        const levels = (order.side === 'BUY') ? state.orderBook.asks : state.orderBook.bids;
-        // Sort levels by price for consistent filling
-        levels.sort((a, b) => (order.side === 'BUY' ? a.price - b.price : b.price - a.price));
-
-        for (let i = 0; i < levels.length && remainingFillQty > 1e-12; i++) {
-            const lvl = levels[i];
-            if (lvl.qty <= 1e-12) continue; // Level is exhausted
-
-            const fillQty = Math.min(remainingFillQty, lvl.qty);
-            const fillPrice = lvl.price;
-
-            // Market orders always pay Taker fee
-            executeFill(order, fillPrice, fillQty, TAKER_FEE_RATE);
-
-            // Reduce order book level quantity
-            lvl.qty = +(lvl.qty - fillQty).toFixed(4); // Use toFixed to avoid floating point precision issues
-            remainingFillQty -= fillQty;
-        }
-
-        // If after trying to fill, order is still NEW/PARTIAL but not fully filled
-        if (order.status !== 'FILLED' && order.filledQty > 0) {
-            console.log(`Market order ${order.orderId} partially filled. Remaining: ${remainingFillQty.toFixed(4)}`);
+                tr.innerHTML = `
+                <td class="ob-bid">${(+lvl.price).toFixed(2)}</td>
+                <td class="ob-bid">${(+lvl.qty).toFixed(4)}</td>
+                `;
+                bidsBodyEl.appendChild(tr);
+            });
+        } catch (error) {
+            console.error("Error rendering order book:", error);
         }
     }
 
-    /**
-     * Adds a limit order to the order book.
-     * @param {object} order - The limit order object.
-     */
-    function addLimitOrderToBook(order) {
-        const lvl = findLevel(order.side, order.price);
-        if (!lvl) {
-            order.status = 'REJECTED';
-            console.warn("LIMIT price out of book range, rejected:", order.price);
-            return false;
-        }
+    function attachOrderBookClick() {
+        const handler = (e) => {
+            const row = e.target.closest('tr');
+            if (!row || !row.dataset.price) return;
 
-        lvl.userOrders.push(order.orderId);
-        order.onBook = true; // Mark order as being on the book
-        return true;
+            const p = parseFloat(row.dataset.price);
+            if (!Number.isFinite(p)) return;
+
+            if (priceInput) priceInput.value = p.toFixed(2);
+        };
+
+        if (asksBodyEl) asksBodyEl.addEventListener('click', handler);
+        if (bidsBodyEl) bidsBodyEl.addEventListener('click', handler);
     }
 
-    /**
-     * Removes a limit order from the order book.
-     * @param {object} order - The limit order object.
-     */
-    function removeOrderFromBook(order) {
-        if (!order || !order.onBook) return;
+    function renderTape() {
+        try {
+            if (!tapeBodyEl) return;
 
-        const lvl = findLevel(order.side, order.price);
-        if (!lvl) return; // Level might have disappeared due to book rebuild
-
-        lvl.userOrders = lvl.userOrders.filter(id => id !== order.orderId);
-        order.onBook = false;
-    }
-
-    /**
-     * Matches limit orders that have been placed on the book against current market price.
-     */
-    function matchLimitOrdersAgainstPrice() {
-        Object.values(state.orders).forEach(order => {
-            if (order.type !== 'LIMIT') return;
-            if (order.status !== 'NEW' && order.status !== 'PARTIAL') return;
-            if (!order.onBook) return; // Only process orders currently on the book
-
-            const remaining = order.qty - order.filledQty;
-            if (remaining <= 1e-12) return;
-
-            const shouldFill =
-                (order.side === 'BUY' && state.ui.bidPrice >= order.price) || // Buy limit hits when current bid >= limit price
-                (order.side === 'SELL' && state.ui.askPrice <= order.price); // Sell limit hits when current ask <= limit price
-
-            if (shouldFill) {
-                // Limit orders that are hit by market price are considered Taker orders
-                executeFill(order, order.price, remaining, TAKER_FEE_RATE);
-                removeOrderFromBook(order); // Remove from book once filled/partial
+            tapeBodyEl.innerHTML = '';
+            if (!state.tape.length) {
+                tapeBodyEl.innerHTML = `<tr><td colspan="4" class="muted" style="text-align:center;">No trades yet.</td></tr>`;
+                return;
             }
-        });
+
+            state.tape.forEach(t => {
+                const tr = document.createElement('tr');
+                const sideColor = (t.side === 'BUY') ? 'var(--buy)' : 'var(--sell)';
+
+                tr.innerHTML = `
+                <td class="muted">${t.ts.toLocaleTimeString()}</td>
+                <td style="color:${sideColor}">${t.side}</td>
+                <td>${t.price.toFixed(2)}</td>
+                <td>${(+t.qty).toFixed(4)}</td>
+                `;
+                tapeBodyEl.appendChild(tr);
+            });
+        } catch (error) {
+            console.error("Error rendering tape:", error);
+        }
     }
+
 
     // --- CORE TRADING LOGIC ---
     function placeOrder(side) {
@@ -624,6 +569,27 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    function matchLimitOrdersAgainstPrice() {
+        Object.values(state.orders).forEach(order => {
+            if (order.type !== 'LIMIT') return;
+            if (order.status !== 'NEW' && order.status !== 'PARTIAL') return;
+            if (!order.onBook) return; // Only process orders currently on the book
+
+            const remaining = order.qty - order.filledQty;
+            if (remaining <= 1e-12) return;
+
+            const shouldFill =
+                (order.side === 'BUY' && state.ui.bidPrice >= order.price) || // Buy limit hits when current bid >= limit price
+                (order.side === 'SELL' && state.ui.askPrice <= order.price); // Sell limit hits when current ask <= limit price
+
+            if (shouldFill) {
+                // Limit orders that are hit by market price are considered Taker orders
+                executeFill(order, order.price, remaining, TAKER_FEE_RATE);
+                removeOrderFromBook(order); // Remove from book once filled/partial
+            }
+        });
+    }
+
     function checkLiquidation() {
         // Cross liquidation trigger: equity <= maintenanceMarginTotal
         if (Object.keys(state.positions).length > 0 && state.user.equity > 0 && state.user.equity <= state.user.maintenanceMarginTotal) {
@@ -631,7 +597,6 @@ document.addEventListener('DOMContentLoaded', () => {
             alert(`Your account has been liquidated! Your wallet balance was ${state.user.walletBalance.toFixed(2)} USDT.`);
             
             // --- MVP Liquidation: Create market orders to close all positions ---
-            // For each open position, create a market order to close it
             Object.values(state.positions).forEach(pos => {
                 const orderId = state.nextOrderId++;
                 const order = {
@@ -686,6 +651,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
+
+    // Attach order book click handler
+    attachOrderBookClick();
+
 
     // --- SIMULATION ---
     function startSimulation() {

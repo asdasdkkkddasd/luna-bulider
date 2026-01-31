@@ -4,9 +4,12 @@
     --text-primary: #d1d4dc;
     --text-secondary: #8c92a2;
     --border-color: #2a2e39;
-    --price-up: #089981;
-    --price-down: #f23645;
+    --price-up: #089981; /* BUY color */
+    --price-down: #f23645; /* SELL color */
     --accent-color: #2962ff;
+    --buy: #089981; /* Alias for price-up */
+    --sell: #f23645; /* Alias for price-down */
+    --muted: #5e6673; /* For muted text */
 }
 
 body {
@@ -38,6 +41,12 @@ header {
     gap: 20px; /* Space between balance and ticker */
 }
 
+#balance-display {
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--text-primary);
+}
+
 .ticker-info {
     font-size: 16px;
     display: flex;
@@ -45,10 +54,15 @@ header {
     gap: 8px; /* Space between symbol and price */
 }
 
-#balance-display {
-    font-size: 16px;
+/* Specific colors for bid/ask */
+#bid-price {
+    color: var(--price-down); /* Traditionally red for bid */
     font-weight: bold;
-    color: var(--text-primary);
+}
+
+#ask-price {
+    color: var(--price-up); /* Traditionally green for ask */
+    font-weight: bold;
 }
 
 .price-up {
@@ -220,4 +234,48 @@ tbody tr:last-child td {
     border-radius: 4px;
     cursor: pointer;
     font-size: 12px;
+}
+
+/* Order Book and Tape specific styles */
+.ob-wrap{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:12px;
+}
+
+.ob-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:12px;
+}
+
+.ob-table th, .ob-table td{
+  padding:6px 8px;
+  border-bottom:1px solid var(--border-color); /* Use general border color */
+  text-align:right;
+}
+
+.ob-row{
+  cursor:pointer;
+}
+
+.ob-row:hover{
+  background: rgba(255,255,255,0.04);
+}
+
+.ob-own{
+  outline: 1px solid rgba(247,166,0,0.55); /* Bybit accent yellow/orange */
+  background: rgba(247,166,0,0.10);
+}
+
+.ob-ask{
+  color: var(--sell);
+}
+
+.ob-bid{
+  color: var(--buy);
+}
+
+.muted{
+  color: var(--muted);
 }
