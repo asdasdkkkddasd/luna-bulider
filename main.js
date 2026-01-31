@@ -73,6 +73,10 @@ document.addEventListener('DOMContentLoaded', () => {
             tpPrice: null, // TP price for current position
             slPrice: null, // SL price for current position
             drag: { active: false, kind: null }, // Drag state for TP/SL lines
+            tpSl: { // TP/SL trigger state
+                activeCloseOrderId: null, // ID of the market order created by TP/SL trigger
+                lastTrigger: null,        // "TP" | "SL" | null
+            },
         },
         
         // --- Sequence for IDs ---
@@ -426,6 +430,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function getMaxLevelQty(levels) {
+        let max = 0;
+        levels.forEach(l => { if (l.qty > max) max = l.qty; });
+        return max || 1;
+    }
+
+    function countMyOrdersAtLevel(level) {
+        return Array.isArray(level.userOrders) ? level.userOrders.length : 0;
+    }
+
     function levelHasMyOrders(level) {
         return Array.isArray(level.userOrders) && level.userOrders.length > 0;
     }
@@ -596,6 +610,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Convert price to Y coordinate on the chart
     function priceToY(price){
         if (!candleSeries) return null;
+        // Check for NaN or non-finite numbers before conversion
+        if (!Number.isFinite(price)) return null;
         return candleSeries.priceToCoordinate(price);
     }
 
@@ -742,6 +758,76 @@ document.addEventListener('DOMContentLoaded', () => {
             state.ui.drag.kind = null;
             overlayEl.classList.remove('dragging');
         });
+    }
+
+    // --- TP/SL TRIGGER LOGIC ---
+    // Helper to place reduce-only market close orders for TP/SL
+    function placeReduceOnlyMarketClose(symbol, reason) {
+        const position = state.positions[symbol];
+        if (!position || position.qty <= 0 || position.side === "FLAT") return;
+
+        // Prevent duplicate TP/SL close orders
+        const activeId = state.ui.tpSl?.activeCloseOrderId;
+        if (activeId && state.orders[activeId] && (state.orders[activeId].status === 'NEW' || state.orders[activeId].status === 'PARTIAL')) {
+            return;
+        }
+
+        const orderId = state.nextOrderId++;
+        const side = (position.side === 'LONG') ? 'SELL' : 'BUY';
+
+        const order = {
+            orderId,
+            symbol,
+            type: 'MARKET',
+            side,
+            qty: position.qty,          // Close entire position
+            price: state.ui.currentPrice, // Will be filled at bid/ask
+            filledQty: 0,
+            status: 'NEW',
+            reduceOnly: true,           // Important for backend
+            lockedMarginAmount: 0,
+            createdAt: new Date(),
+            reason,                     // For logging/display
+        };
+
+        state.orders[orderId] = order;
+        state.ui.tpSl.activeCloseOrderId = orderId;
+        state.ui.tpSl.lastTrigger = reason;
+
+        console.log(`[TP/SL] Triggered ${reason} close order ${orderId} for ${symbol}, qty=${order.qty}`);
+        renderOrders();
+
+        // Flash TP/SL tag
+        if (reason === "TP" && tpTag) { tpTag.classList.remove('flash-up'); void tpTag.offsetWidth; tpTag.classList.add('flash-up'); }
+        if (reason === "SL" && slTag) { slTag.classList.remove('flash-dn'); void slTag.offsetWidth; slTag.classList.add('flash-dn'); }
+    }
+
+    // Check if TP/SL conditions are met
+    function checkTpSlTriggers() {
+        const pos = state.positions[SYMBOL];
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return;
+
+        const tp = state.ui.tpPrice;
+        const sl = state.ui.slPrice;
+        if (!(Number.isFinite(tp) && Number.isFinite(sl))) return;
+
+        // Position close is opposite direction market order
+        // LONG close (SELL) triggers on bid price
+        // SHORT close (BUY) triggers on ask price
+        const bid = state.ui.bidPrice;
+        const ask = state.ui.askPrice;
+
+        if (pos.side === "LONG") {
+            // TP: current bid >= TP price
+            // SL: current bid <= SL price
+            if (bid >= tp) placeReduceOnlyMarketClose(SYMBOL, "TP");
+            else if (bid <= sl) placeReduceOnlyMarketClose(SYMBOL, "SL");
+        } else { // SHORT
+            // TP: current ask <= TP price
+            // SL: current ask >= SL price
+            if (ask <= tp) placeReduceOnlyMarketClose(SYMBOL, "TP");
+            else if (ask >= sl) placeReduceOnlyMarketClose(SYMBOL, "SL");
+        }
     }
 
 
@@ -940,7 +1026,8 @@ document.addEventListener('DOMContentLoaded', () => {
             updateBidAskFromMid(state.ui.currentPrice);
             rebuildOrderBookFromMid(state.ui.currentPrice);
 
-            tryFillOrders();              // Process market orders first
+            checkTpSlTriggers();              // Check TP/SL conditions first
+            tryFillOrders();              // Process market orders
             matchLimitOrdersAgainstPrice(); // Then check for limit order fills
             checkLiquidation(); 
             renderPrice(); // This calls updateAccountMetrics, renderOrders and renderPositions
