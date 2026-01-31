@@ -69,6 +69,7 @@ document.addEventListener('DOMContentLoaded', () => {
             currentPrice: 60000, // Current markPrice (mid-price)
             bidPrice: 59995,   // For spread
             askPrice: 60005,   // For spread
+            lastFill: null, // Tracks last fill for order book flash animation
         },
         
         // --- Sequence for IDs ---
@@ -395,36 +396,80 @@ document.addEventListener('DOMContentLoaded', () => {
         return Array.isArray(level.userOrders) && level.userOrders.length > 0;
     }
 
+    let lastTapeKey = ""; // Track for flashing trade tape entries
+
     function renderOrderBook() {
         try {
             if (!asksBodyEl || !bidsBodyEl) return;
 
-            // Asks (낮은 가격이 위에 오게 = 지금 배열이 bestAsk부터면 그대로)
+            const asks = state.orderBook.asks || [];
+            const bids = state.orderBook.bids || [];
+
+            const maxAsk = getMaxLevelQty(asks);
+            const maxBid = getMaxLevelQty(bids);
+
+            // Asks
             asksBodyEl.innerHTML = '';
-            // Sort asks from low to high price for display
-            [...state.orderBook.asks].sort((a,b) => a.price - b.price).forEach(lvl => {
+            // Sort asks from high to low price for display consistent with traditional order books
+            [...asks].sort((a,b) => b.price - a.price).forEach(lvl => {
                 const tr = document.createElement('tr');
                 tr.className = `ob-row ${levelHasMyOrders(lvl) ? 'ob-own' : ''}`;
                 tr.dataset.price = lvl.price;
 
+                const pct = Math.max(0, Math.min(100, (lvl.qty / maxAsk) * 100));
+                const myCount = countMyOrdersAtLevel(lvl);
+
+                // Flash for order book level fills
+                const lf = state.ui.lastFill;
+                if (lf && (Date.now() - lf.ts) < 500 && Math.abs(lf.price - lvl.price) < 1e-9) {
+                    tr.classList.add(lf.side === 'BUY' ? 'flash-dn' : 'flash-up'); // Market BUY fills ASKS (flash down for ask side)
+                }
+
                 tr.innerHTML = `
-                <td class="ob-ask">${(+lvl.qty).toFixed(4)}</td>
-                <td class="ob-ask">${(+lvl.price).toFixed(2)}</td>
+                <td class="ob-cell ob-ask" style="--w:${pct.toFixed(1)}%">
+                    <span class="ob-bar ask"></span>
+                    <span class="ob-text">${(+lvl.qty).toFixed(4)}</span>
+                </td>
+                <td class="ob-cell ob-ask" style="--w:${pct.toFixed(1)}%">
+                    <span class="ob-bar ask"></span>
+                    <span class="ob-text">
+                    ${(+lvl.price).toFixed(2)}
+                    ${myCount ? `<span class="ob-badge">MY ${myCount}</span>` : ``}
+                    </span>
+                </td>
                 `;
                 asksBodyEl.appendChild(tr);
             });
 
-            // Bids (높은 가격이 위에 오게 = 지금 배열이 bestBid부터면 reverse)
+            // Bids
             bidsBodyEl.innerHTML = '';
             // Sort bids from high to low price for display
-            [...state.orderBook.bids].sort((a,b) => b.price - a.price).forEach(lvl => {
+            [...bids].sort((a,b) => b.price - a.price).forEach(lvl => {
                 const tr = document.createElement('tr');
                 tr.className = `ob-row ${levelHasMyOrders(lvl) ? 'ob-own' : ''}`;
                 tr.dataset.price = lvl.price;
 
+                const pct = Math.max(0, Math.min(100, (lvl.qty / maxBid) * 100));
+                const myCount = countMyOrdersAtLevel(lvl);
+
+                // Flash for order book level fills
+                const lf = state.ui.lastFill;
+                if (lf && (Date.now() - lf.ts) < 500 && Math.abs(lf.price - lvl.price) < 1e-9) {
+                    tr.classList.add(lf.side === 'BUY' ? 'flash-up' : 'flash-dn'); // Market SELL fills BIDS (flash up for bid side)
+                }
+
                 tr.innerHTML = `
-                <td class="ob-bid">${(+lvl.price).toFixed(2)}</td>
-                <td class="ob-bid">${(+lvl.qty).toFixed(4)}</td>
+                <td class="ob-cell ob-bid" style="--w:${pct.toFixed(1)}%">
+                    <span class="ob-bar bid"></span>
+                    <span class="ob-text">
+                    ${(+lvl.price).toFixed(2)}
+                    ${myCount ? `<span class="ob-badge">MY ${myCount}</span>` : ``}
+                    </span>
+                </td>
+                <td class="ob-cell ob-bid" style="--w:${pct.toFixed(1)}%">
+                    <span class="ob-bar bid"></span>
+                    <span class="ob-text">${(+lvl.qty).toFixed(4)}</span>
+                </td>
                 `;
                 bidsBodyEl.appendChild(tr);
             });
@@ -458,9 +503,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            state.tape.forEach(t => {
+            const top = state.tape[0];
+            const topKey = `${top.ts.getTime()}-${top.side}-${top.price}-${top.qty}`;
+
+            state.tape.forEach((t, idx) => {
                 const tr = document.createElement('tr');
                 const sideColor = (t.side === 'BUY') ? 'var(--buy)' : 'var(--sell)';
+
+                // ✅ 새로 들어온 맨 위 체결이면 flash
+                if (idx === 0 && topKey !== lastTapeKey) {
+                    tr.classList.add(t.side === 'BUY' ? 'flash-up' : 'flash-dn');
+                }
 
                 tr.innerHTML = `
                 <td class="muted">${t.ts.toLocaleTimeString()}</td>
@@ -470,6 +523,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 `;
                 tapeBodyEl.appendChild(tr);
             });
+
+            lastTapeKey = topKey;
         } catch (error) {
             console.error("Error rendering tape:", error);
         }
@@ -597,6 +652,7 @@ document.addEventListener('DOMContentLoaded', () => {
             alert(`Your account has been liquidated! Your wallet balance was ${state.user.walletBalance.toFixed(2)} USDT.`);
             
             // --- MVP Liquidation: Create market orders to close all positions ---
+            // For each open position, create a market order to close it
             Object.values(state.positions).forEach(pos => {
                 const orderId = state.nextOrderId++;
                 const order = {

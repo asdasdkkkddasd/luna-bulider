@@ -279,3 +279,45 @@ tbody tr:last-child td {
 .muted{
   color: var(--muted);
 }
+
+/* Depth bar (잔량 막대) */
+.ob-cell{
+  position: relative;
+  overflow: hidden;
+}
+
+.ob-bar{
+  position:absolute;
+  top:0; bottom:0;
+  width: var(--w, 0%);
+  opacity: 0.18;
+  pointer-events:none;
+}
+
+.ob-bar.ask{ right:0; background: var(--sell); }
+.ob-bar.bid{ left:0;  background: var(--buy);  }
+
+.ob-text{
+  position: relative;
+  z-index: 1;
+}
+
+/* 내 주문 뱃지 */
+.ob-badge{
+  display:inline-block;
+  margin-left:6px;
+  padding:1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+  background: rgba(247,166,0,0.15);
+  color: var(--accent-color); /* Use general accent color */
+  border: 1px solid rgba(247,166,0,0.35);
+}
+
+/* 체결/업데이트 깜빡임 */
+ @keyframes flashUp { 0%{background: rgba(14,203,129,.22);} 100%{background: transparent;} }
+ @keyframes flashDn { 0%{background: rgba(246,70,93,.22);} 100%{background: transparent;} }
+
+.flash-up{ animation: flashUp 450ms ease-out; }
+.flash-dn{ animation: flashDn 450ms ease-out; }
