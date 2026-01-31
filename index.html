@@ -3,28 +3,60 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>사주팔자</title>
+    <title>모의 암호화폐 거래소</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
-        <div class="theme-switcher">
-            <label for="theme-switch">다크 모드</label>
-            <input type="checkbox" id="theme-switch">
-        </div>
-        <h1>당신의 사주팔자를 알아보세요</h1>
-        <div class="input-container">
-            <label for="year">생년</label>
-            <input type="number" id="year" placeholder="예) 1990">
-            <label for="month">월</label>
-            <input type="number" id="month" placeholder="예) 1">
-            <label for="day">일</label>
-            <input type="number" id="day" placeholder="예) 1">
-            <label for="hour">시</label>
-            <input type="number" id="hour" placeholder="예) 13">
-            <button id="calculate-btn">결과 보기</button>
-        </div>
-        <div id="result"></div>
+        <header>
+            <h1>Crypto Mock Trader</h1>
+        </header>
+        
+        <main>
+            <section class="market-data">
+                <h2>실시간 시세 (Bybit)</h2>
+                <div class="tickers">
+                    <div class="ticker" id="btc-ticker">
+                        <h3>Bitcoin (BTC/USDT)</h3>
+                        <p class="price" id="btc-price">Loading...</p>
+                        <p class="volume" id="btc-volume">24h Volume: Loading...</p>
+                    </div>
+                    <div class="ticker" id="eth-ticker">
+                        <h3>Ethereum (ETH/USDT)</h3>
+                        <p class="price" id="eth-price">Loading...</p>
+                        <p class="volume" id="eth-volume">24h Volume: Loading...</p>
+                    </div>
+                </div>
+            </section>
+            
+            <section class="trading-panel">
+                <h2>거래</h2>
+                <div class="trade-form">
+                    <select id="crypto-select">
+                        <option value="BTC">Bitcoin (BTC)</option>
+                        <option value="ETH">Ethereum (ETH)</option>
+                    </select>
+                    <input type="number" id="trade-amount" placeholder="수량" min="0">
+                    <button id="buy-btn">매수</button>
+                    <button id="sell-btn">매도</button>
+                </div>
+            </section>
+            
+            <section class="portfolio">
+                <h2>내 자산</h2>
+                <div class="balance">
+                    <p>현금 (USD): <span id="cash-balance">Loading...</span></p>
+                </div>
+                <div class="holdings">
+                    <p>BTC: <span id="btc-holding">Loading...</span></p>
+                    <p>ETH: <span id="eth-holding">Loading...</span></p>
+                </div>
+            </section>
+        </main>
+        
+        <footer>
+            <p>Data provided by Bybit. This is a simulation and does not involve real money.</p>
+        </footer>
     </div>
     <script src="main.js"></script>
 </body>

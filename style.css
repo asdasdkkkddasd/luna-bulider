@@ -1,111 +1,159 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700&display=swap');
+
 :root {
-    --bg-color: #f0f0f0;
-    --text-color: #333;
-    --container-bg: white;
-    --h1-color: #4a4a4a;
-    --label-color: #666;
-    --input-border: #ccc;
-    --btn-bg: #5a9;
-    --btn-hover-bg: #489;
-    --result-bg: #f9f9f9;
-    --result-border: #eee;
+    --bg-color: #1a1a1a;
+    --primary-color: #2c2c2c;
+    --secondary-color: #444;
+    --text-color: #f0f0f0;
+    --accent-color: #00ff99;
+    --green: #26a69a;
+    --red: #ef5350;
+    --border-radius: 8px;
 }
 
-[data-theme='dark'] {
-    --bg-color: #333;
-    --text-color: #f0f0f0;
-    --container-bg: #4a4a4a;
-    --h1-color: white;
-    --label-color: #f0f0f0;
-    --input-border: #666;
-    --btn-bg: #489;
-    --btn-hover-bg: #5a9;
-    --result-bg: #666;
-    --result-border: #888;
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
 }
 
 body {
-    font-family: sans-serif;
+    font-family: 'Noto Sans KR', sans-serif;
     background-color: var(--bg-color);
     color: var(--text-color);
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    min-height: 100vh;
-    margin: 0;
-    transition: background-color 0.3s, color 0.3s;
+    line-height: 1.6;
 }
 
 .container {
-    background-color: var(--container-bg);
-    padding: 2rem;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    text-align: center;
-    position: relative;
+    width: 90%;
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 1rem;
 }
 
-.theme-switcher {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
+header h1 {
+    text-align: center;
+    color: var(--accent-color);
+    margin-bottom: 2rem;
+}
+
+main {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 1.5rem;
+}
+
+section {
+    background-color: var(--primary-color);
+    padding: 1.5rem;
+    border-radius: var(--border-radius);
+    box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+}
+
+h2 {
+    color: var(--accent-color);
+    border-bottom: 2px solid var(--secondary-color);
+    padding-bottom: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.market-data .tickers {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 1.5rem;
+}
+
+.ticker {
+    background-color: var(--secondary-color);
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    text-align: center;
+}
+
+.ticker .price {
+    font-size: 2rem;
+    font-weight: 700;
+    margin: 0.5rem 0;
+}
+
+.ticker .volume {
+    font-size: 0.9rem;
+    color: #bbb;
+}
+
+.trading-panel .trade-form {
     display: flex;
+    gap: 1rem;
     align-items: center;
 }
 
-.theme-switcher label {
-    font-size: 0.9rem;
-    margin-right: 0.5rem;
-}
-
-h1 {
-    color: var(--h1-color);
-    margin-bottom: 1.5rem;
-}
-
-.input-container {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-}
-
-.input-container label {
-    font-size: 0.9rem;
-    color: var(--label-color);
-}
-
-.input-container input {
-    width: 60px;
-    padding: 0.5rem;
-    border: 1px solid var(--input-border);
+.trade-form select,
+.trade-form input {
+    font-family: inherit;
+    padding: 0.75rem;
     border-radius: 4px;
-    text-align: center;
-    background-color: var(--container-bg);
+    border: 1px solid var(--secondary-color);
+    background-color: var(--bg-color);
     color: var(--text-color);
+    font-size: 1rem;
 }
 
-#calculate-btn {
-    background-color: var(--btn-bg);
-    color: white;
+.trade-form select {
+    flex-grow: 1;
+}
+
+.trade-form input {
+    flex-grow: 2;
+    width: 150px;
+}
+
+.trade-form button {
+    font-family: inherit;
     border: none;
     padding: 0.75rem 1.5rem;
     border-radius: 4px;
     cursor: pointer;
     font-size: 1rem;
-    transition: background-color 0.3s;
+    font-weight: 700;
+    color: #fff;
+    transition: opacity 0.3s;
 }
 
-#calculate-btn:hover {
-    background-color: var(--btn-hover-bg);
+.trade-form button:hover {
+    opacity: 0.85;
 }
 
-#result {
-    margin-top: 1.5rem;
-    padding: 1rem;
-    border: 1px solid var(--result-border);
-    border-radius: 4px;
-    background-color: var(--result-bg);
-    min-height: 50px;
+#buy-btn {
+    background-color: var(--green);
+}
+
+#sell-btn {
+    background-color: var(--red);
+}
+
+.portfolio .balance,
+.portfolio .holdings {
+    font-size: 1.2rem;
+    margin-bottom: 0.5rem;
+}
+
+.portfolio span {
+    font-weight: 700;
+    color: var(--accent-color);
+}
+
+footer {
+    text-align: center;
+    margin-top: 2rem;
+    font-size: 0.8rem;
+    color: #888;
+}
+
+@media (min-width: 768px) {
+    main {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    .market-data {
+        grid-column: 1 / -1;
+    }
 }
