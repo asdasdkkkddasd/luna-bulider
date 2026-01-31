@@ -1,5 +1,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     // --- DOM Elements ---
+    const btcLivePriceEl = document.getElementById('btc-live-price');
+    const ethLivePriceEl = document.getElementById('eth-live-price');
     const cashBalanceEl = document.getElementById('cash-balance');
     const btcHoldingEl = document.getElementById('btc-holding');
     const ethHoldingEl = document.getElementById('eth-holding');
@@ -19,7 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
         ETH: { price: 0 }
     };
     const initialPortfolio = {
-        cash: 10000,
+        cash: 10000000, // Starting with 10,000,000 KRW
         BTC: 0,
         ETH: 0
     };
@@ -31,6 +33,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Charting ---
     function createChart(containerId) {
         const chartElement = document.getElementById(containerId);
+        // Ensure the chart container takes full width
+        chartElement.style.width = '100%'; 
         const chart = LightweightCharts.createChart(chartElement, {
             width: chartElement.clientWidth,
             height: 300,
@@ -49,65 +53,115 @@ document.addEventListener('DOMContentLoaded', () => {
         return chart;
     }
 
-    async function fetchKlineData(symbol, interval = '1', limit = '100') {
+    async function fetchUpbitKlineData(market, unit = 'minutes', count = 100) {
         try {
-            const response = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=${interval}&limit=${limit}`);
-            if (!response.ok) throw new Error('Network response was not ok');
+            // Upbit's candles/minutes API uses count for number of candles
+            const url = `https://api.upbit.com/v1/candles/${unit}/1?market=${market}&count=${count}`;
+            const response = await fetch(url);
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Network response was not ok: ${response.status} - ${errorText}`);
+            }
             const data = await response.json();
-            if (data.retCode !== 0) throw new Error('Bybit API returned an error');
             
-            // Bybit returns [timestamp, open, high, low, close, volume, turnover]
-            // Lightweight charts needs { time, open, high, low, close }
-            return data.result.list.map(d => ({
-                time: parseInt(d[0]) / 1000,
-                open: parseFloat(d[1]),
-                high: parseFloat(d[2]),
-                low: parseFloat(d[3]),
-                close: parseFloat(d[4]),
-            })).reverse(); // Bybit sends newest first, so reverse it
+            // Upbit returns newest first, reverse for Lightweight Charts
+            // Upbit data: { market, candle_date_time_utc, opening_price, high_price, low_price, trade_price, timestamp }
+            return data.map(d => ({
+                time: new Date(d.candle_date_time_utc).getTime() / 1000, // Convert to seconds
+                open: d.opening_price,
+                high: d.high_price,
+                low: d.low_price,
+                close: d.trade_price,
+            })).reverse();
         } catch (error) {
-            console.error(`Failed to fetch kline data for ${symbol}:`, error);
+            console.error(`Failed to fetch kline data for ${market}:`, error);
             return [];
         }
     }
 
     // --- UI Updates ---
     function updatePortfolioUI() {
-        cashBalanceEl.textContent = `$${portfolio.cash.toFixed(2)}`;
+        cashBalanceEl.textContent = `${portfolio.cash.toLocaleString()} KRW`;
         btcHoldingEl.textContent = portfolio.BTC.toFixed(6);
         ethHoldingEl.textContent = portfolio.ETH.toFixed(6);
     }
-
+    
     async function updateRealtimeData() {
         try {
-            const response = await fetch('https://api.bybit.com/v5/market/tickers?category=spot');
-            const data = await response.json();
-            if (data.retCode !== 0) return;
+            const response = await fetch('https://api.upbit.com/v1/ticker?markets=KRW-BTC,KRW-ETH');
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Network response was not ok: ${response.status} - ${errorText}`);
+            }
+            const data = await response.json(); // This is an array
+            
+            const btcTicker = data.find(t => t.market === 'KRW-BTC');
+            const ethTicker = data.find(t => t.market === 'KRW-ETH');
 
-            const btcData = data.result.list.find(t => t.symbol === 'BTCUSDT');
-            const ethData = data.result.list.find(t => t.symbol === 'ETHUSDT');
-
-            if (btcData) {
-                const price = parseFloat(btcData.lastPrice);
+            if (btcTicker) {
+                const price = btcTicker.trade_price;
                 marketData.BTC.price = price;
+                btcLivePriceEl.textContent = `${price.toLocaleString()} KRW`;
+                // Update chart's last candle
                 const lastCandle = btcCandlestickSeries.dataByIndex(btcCandlestickSeries.data().length - 1);
-                lastCandle.close = price; // just update the close for a simple tick effect
-                if (price > lastCandle.high) lastCandle.high = price;
-                if (price < lastCandle.low) lastCandle.low = price;
-                btcCandlestickSeries.update(lastCandle);
+                // Only update if current time is within the last minute of the last candle
+                // Or simply update the close price of the last known candle
+                if (lastCandle) {
+                     // Check if it's a new minute or update current minute
+                    const currentTime = Math.floor(Date.now() / 1000);
+                    const lastCandleTime = lastCandle.time;
+                    const oneMinute = 60;
+                    if (currentTime - lastCandleTime >= oneMinute) {
+                        // New minute, add a new candle
+                        const newCandle = {
+                            time: currentTime,
+                            open: price,
+                            high: price,
+                            low: price,
+                            close: price,
+                        };
+                        btcCandlestickSeries.update(newCandle);
+                    } else {
+                        // Same minute, update current candle
+                        const updatedCandle = { ...lastCandle, close: price };
+                        if (price > updatedCandle.high) updatedCandle.high = price;
+                        if (price < updatedCandle.low) updatedCandle.low = price;
+                        btcCandlestickSeries.update(updatedCandle);
+                    }
+                }
             }
 
-            if (ethData) {
-                const price = parseFloat(ethData.lastPrice);
+            if (ethTicker) {
+                const price = ethTicker.trade_price;
                 marketData.ETH.price = price;
+                ethLivePriceEl.textContent = `${price.toLocaleString()} KRW`;
+                // Update chart's last candle
                 const lastCandle = ethCandlestickSeries.dataByIndex(ethCandlestickSeries.data().length - 1);
-                lastCandle.close = price;
-                if (price > lastCandle.high) lastCandle.high = price;
-                if (price < lastCandle.low) lastCandle.low = price;
-                ethCandlestickSeries.update(lastCandle);
+                if (lastCandle) {
+                    const currentTime = Math.floor(Date.now() / 1000);
+                    const lastCandleTime = lastCandle.time;
+                    const oneMinute = 60;
+                    if (currentTime - lastCandleTime >= oneMinute) {
+                        const newCandle = {
+                            time: currentTime,
+                            open: price,
+                            high: price,
+                            low: price,
+                            close: price,
+                        };
+                        ethCandlestickSeries.update(newCandle);
+                    } else {
+                        const updatedCandle = { ...lastCandle, close: price };
+                        if (price > updatedCandle.high) updatedCandle.high = price;
+                        if (price < updatedCandle.low) updatedCandle.low = price;
+                        ethCandlestickSeries.update(updatedCandle);
+                    }
+                }
             }
         } catch (error) {
-            console.error("Failed to fetch ticker data:", error);
+            console.error("Failed to fetch Upbit ticker data:", error);
+            btcLivePriceEl.textContent = 'Error';
+            ethLivePriceEl.textContent = 'Error';
         }
     }
 
@@ -157,9 +211,10 @@ document.addEventListener('DOMContentLoaded', () => {
         btcCandlestickSeries = btcChart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
         ethCandlestickSeries = ethChart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
 
-        const btcKline = await fetchKlineData('BTCUSDT');
-        const ethKline = await fetchKlineData('ETHUSDT');
-        btcCandlestickSeries.setData(btcKline);
+        // Fetch historical data
+        const btcKline = await fetchUpbitKlineData('KRW-BTC');
+        const ethKline = await fetchUpbitKlineData('KRW-ETH');
+        btcCandlestickSeries.setData(btckline);
         ethCandlestickSeries.setData(ethKline);
         
         // Start live updates

@@ -15,14 +15,20 @@
         
         <main>
             <section class="market-data">
-                <h2>실시간 차트 (Bybit, 1분)</h2>
+                <h2>실시간 차트 (Upbit, 1분)</h2>
                 <div class="charts">
                     <div class="chart-container">
-                        <h3>Bitcoin (BTC/USDT)</h3>
+                        <div class="chart-header">
+                            <h3>Bitcoin (KRW-BTC)</h3>
+                            <div class="live-price" id="btc-live-price">Loading...</div>
+                        </div>
                         <div id="btc-chart"></div>
                     </div>
                     <div class="chart-container">
-                        <h3>Ethereum (ETH/USDT)</h3>
+                        <div class="chart-header">
+                            <h3>Ethereum (KRW-ETH)</h3>
+                            <div class="live-price" id="eth-live-price">Loading...</div>
+                        </div>
                         <div id="eth-chart"></div>
                     </div>
                 </div>
@@ -44,7 +50,7 @@
             <section class="portfolio">
                 <h2>내 자산</h2>
                 <div class="balance">
-                    <p>현금 (USD): <span id="cash-balance">Loading...</span></p>
+                    <p>현금 (KRW): <span id="cash-balance">Loading...</span></p>
                 </div>
                 <div class="holdings">
                     <p>BTC: <span id="btc-holding">Loading...</span></p>
@@ -54,7 +60,7 @@
         </main>
         
         <footer>
-            <p>Data provided by Bybit. This is a simulation and does not involve real money.</p>
+            <p>Data provided by Upbit. This is a simulation and does not involve real money.</p>
         </footer>
     </div>
     <script src="main.js"></script>
