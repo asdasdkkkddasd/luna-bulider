@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>모의 암호화폐 거래소</title>
     <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
     <div class="container">
@@ -14,17 +15,15 @@
         
         <main>
             <section class="market-data">
-                <h2>실시간 시세 (Bybit)</h2>
-                <div class="tickers">
-                    <div class="ticker" id="btc-ticker">
+                <h2>실시간 차트 (Bybit, 1분)</h2>
+                <div class="charts">
+                    <div class="chart-container">
                         <h3>Bitcoin (BTC/USDT)</h3>
-                        <p class="price" id="btc-price">Loading...</p>
-                        <p class="volume" id="btc-volume">24h Volume: Loading...</p>
+                        <div id="btc-chart"></div>
                     </div>
-                    <div class="ticker" id="eth-ticker">
+                    <div class="chart-container">
                         <h3>Ethereum (ETH/USDT)</h3>
-                        <p class="price" id="eth-price">Loading...</p>
-                        <p class="volume" id="eth-volume">24h Volume: Loading...</p>
+                        <div id="eth-chart"></div>
                     </div>
                 </div>
             </section>

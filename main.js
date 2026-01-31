@@ -1,9 +1,5 @@
 document.addEventListener('DOMContentLoaded', () => {
     // --- DOM Elements ---
-    const btcPriceEl = document.getElementById('btc-price');
-    const btcVolumeEl = document.getElementById('btc-volume');
-    const ethPriceEl = document.getElementById('eth-price');
-    const ethVolumeEl = document.getElementById('eth-volume');
     const cashBalanceEl = document.getElementById('cash-balance');
     const btcHoldingEl = document.getElementById('btc-holding');
     const ethHoldingEl = document.getElementById('eth-holding');
@@ -12,32 +8,67 @@ document.addEventListener('DOMContentLoaded', () => {
     const buyBtn = document.getElementById('buy-btn');
     const sellBtn = document.getElementById('sell-btn');
 
+    // --- Chart Objects ---
+    let btcChart, ethChart;
+    let btcCandlestickSeries, ethCandlestickSeries;
+
     // --- State Management ---
     let portfolio = {};
     let marketData = {
         BTC: { price: 0 },
         ETH: { price: 0 }
     };
-
     const initialPortfolio = {
         cash: 10000,
         BTC: 0,
         ETH: 0
     };
 
-    function initializeState() {
-        const savedPortfolio = localStorage.getItem('cryptoPortfolio');
-        if (savedPortfolio) {
-            portfolio = JSON.parse(savedPortfolio);
-        } else {
-            portfolio = { ...initialPortfolio };
-            saveState();
-        }
-        updatePortfolioUI();
-    }
-
     function saveState() {
         localStorage.setItem('cryptoPortfolio', JSON.stringify(portfolio));
+    }
+
+    // --- Charting ---
+    function createChart(containerId) {
+        const chartElement = document.getElementById(containerId);
+        const chart = LightweightCharts.createChart(chartElement, {
+            width: chartElement.clientWidth,
+            height: 300,
+            layout: {
+                backgroundColor: '#2c2c2c',
+                textColor: 'rgba(255, 255, 255, 0.9)',
+            },
+            grid: {
+                vertLines: { color: '#444' },
+                horzLines: { color: '#444' },
+            },
+            crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            rightPriceScale: { borderColor: '#71649C' },
+            timeScale: { borderColor: '#71649C' },
+        });
+        return chart;
+    }
+
+    async function fetchKlineData(symbol, interval = '1', limit = '100') {
+        try {
+            const response = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=${symbol}&interval=${interval}&limit=${limit}`);
+            if (!response.ok) throw new Error('Network response was not ok');
+            const data = await response.json();
+            if (data.retCode !== 0) throw new Error('Bybit API returned an error');
+            
+            // Bybit returns [timestamp, open, high, low, close, volume, turnover]
+            // Lightweight charts needs { time, open, high, low, close }
+            return data.result.list.map(d => ({
+                time: parseInt(d[0]) / 1000,
+                open: parseFloat(d[1]),
+                high: parseFloat(d[2]),
+                low: parseFloat(d[3]),
+                close: parseFloat(d[4]),
+            })).reverse(); // Bybit sends newest first, so reverse it
+        } catch (error) {
+            console.error(`Failed to fetch kline data for ${symbol}:`, error);
+            return [];
+        }
     }
 
     // --- UI Updates ---
@@ -46,52 +77,37 @@ document.addEventListener('DOMContentLoaded', () => {
         btcHoldingEl.textContent = portfolio.BTC.toFixed(6);
         ethHoldingEl.textContent = portfolio.ETH.toFixed(6);
     }
-    
-    function updateMarketDataUI() {
-        // Update BTC
-        if (marketData.BTC && marketData.BTC.price) {
-            btcPriceEl.textContent = `$${parseFloat(marketData.BTC.price).toFixed(2)}`;
-            btcVolumeEl.textContent = `24h Volume: ${parseFloat(marketData.BTC.volume).toLocaleString()}`;
-        }
-        // Update ETH
-        if (marketData.ETH && marketData.ETH.price) {
-            ethPriceEl.textContent = `$${parseFloat(marketData.ETH.price).toFixed(2)}`;
-            ethVolumeEl.textContent = `24h Volume: ${parseFloat(marketData.ETH.volume).toLocaleString()}`;
-        }
-    }
 
-    // --- API Client ---
-    async function fetchMarketData() {
+    async function updateRealtimeData() {
         try {
             const response = await fetch('https://api.bybit.com/v5/market/tickers?category=spot');
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
             const data = await response.json();
-            
-            if (data.retCode === 0 && data.result && data.result.list) {
-                const btcData = data.result.list.find(t => t.symbol === 'BTCUSDT');
-                const ethData = data.result.list.find(t => t.symbol === 'ETHUSDT');
+            if (data.retCode !== 0) return;
 
-                if (btcData) {
-                    marketData.BTC.price = btcData.lastPrice;
-                    marketData.BTC.volume = btcData.volume24h;
-                }
+            const btcData = data.result.list.find(t => t.symbol === 'BTCUSDT');
+            const ethData = data.result.list.find(t => t.symbol === 'ETHUSDT');
 
-                if (ethData) {
-                    marketData.ETH.price = ethData.lastPrice;
-                    marketData.ETH.volume = ethData.volume24h;
-                }
-                
-                updateMarketDataUI();
-            } else {
-                console.error("Invalid data format from Bybit API:", data);
+            if (btcData) {
+                const price = parseFloat(btcData.lastPrice);
+                marketData.BTC.price = price;
+                const lastCandle = btcCandlestickSeries.dataByIndex(btcCandlestickSeries.data().length - 1);
+                lastCandle.close = price; // just update the close for a simple tick effect
+                if (price > lastCandle.high) lastCandle.high = price;
+                if (price < lastCandle.low) lastCandle.low = price;
+                btcCandlestickSeries.update(lastCandle);
             }
 
+            if (ethData) {
+                const price = parseFloat(ethData.lastPrice);
+                marketData.ETH.price = price;
+                const lastCandle = ethCandlestickSeries.dataByIndex(ethCandlestickSeries.data().length - 1);
+                lastCandle.close = price;
+                if (price > lastCandle.high) lastCandle.high = price;
+                if (price < lastCandle.low) lastCandle.low = price;
+                ethCandlestickSeries.update(lastCandle);
+            }
         } catch (error) {
-            console.error("Failed to fetch market data:", error);
-            btcPriceEl.textContent = 'Error';
-            ethPriceEl.textContent = 'Error';
+            console.error("Failed to fetch ticker data:", error);
         }
     }
 
@@ -102,27 +118,24 @@ document.addEventListener('DOMContentLoaded', () => {
             alert('시장 데이터를 사용할 수 없습니다. 잠시 후 다시 시도하세요.');
             return;
         }
-        
         const cost = amount * price;
 
         if (type === 'buy') {
-            if (portfolio.cash >= cost) {
-                portfolio.cash -= cost;
-                portfolio[crypto] += amount;
-                alert(`${amount} ${crypto}를 성공적으로 매수했습니다.`);
-            } else {
+            if (portfolio.cash < cost) {
                 alert('현금이 부족합니다.');
                 return;
             }
+            portfolio.cash -= cost;
+            portfolio[crypto] += amount;
+            alert(`${amount} ${crypto}를 성공적으로 매수했습니다.`);
         } else if (type === 'sell') {
-            if (portfolio[crypto] >= amount) {
-                portfolio.cash += cost;
-                portfolio[crypto] -= amount;
-                alert(`${amount} ${crypto}를 성공적으로 매도했습니다.`);
-            } else {
+            if (portfolio[crypto] < amount) {
                 alert('보유 수량이 부족합니다.');
                 return;
             }
+            portfolio.cash += cost;
+            portfolio[crypto] -= amount;
+            alert(`${amount} ${crypto}를 성공적으로 매도했습니다.`);
         }
 
         tradeAmountEl.value = '';
@@ -130,29 +143,42 @@ document.addEventListener('DOMContentLoaded', () => {
         updatePortfolioUI();
     }
 
+    // --- Initialization ---
+    async function initializeApp() {
+        // State
+        const savedPortfolio = localStorage.getItem('cryptoPortfolio');
+        portfolio = savedPortfolio ? JSON.parse(savedPortfolio) : { ...initialPortfolio };
+        saveState();
+        updatePortfolioUI();
+
+        // Charts
+        btcChart = createChart('btc-chart');
+        ethChart = createChart('eth-chart');
+        btcCandlestickSeries = btcChart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+        ethCandlestickSeries = ethChart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+
+        const btcKline = await fetchKlineData('BTCUSDT');
+        const ethKline = await fetchKlineData('ETHUSDT');
+        btcCandlestickSeries.setData(btcKline);
+        ethCandlestickSeries.setData(ethKline);
+        
+        // Start live updates
+        updateRealtimeData(); // Initial fetch
+        setInterval(updateRealtimeData, 3000);
+    }
+    
     // --- Event Listeners ---
     buyBtn.addEventListener('click', () => {
-        const crypto = cryptoSelectEl.value;
         const amount = parseFloat(tradeAmountEl.value);
-        if (amount > 0) {
-            executeTrade('buy', crypto, amount);
-        } else {
-            alert('유효한 수량을 입력하세요.');
-        }
+        if (amount > 0) executeTrade('buy', cryptoSelectEl.value, amount);
+        else alert('유효한 수량을 입력하세요.');
     });
 
     sellBtn.addEventListener('click', () => {
-        const crypto = cryptoSelectEl.value;
         const amount = parseFloat(tradeAmountEl.value);
-        if (amount > 0) {
-            executeTrade('sell', crypto, amount);
-        } else {
-            alert('유효한 수량을 입력하세요.');
-        }
+        if (amount > 0) executeTrade('sell', cryptoSelectEl.value, amount);
+        else alert('유효한 수량을 입력하세요.');
     });
 
-    // --- Initialization ---
-    initializeState();
-    fetchMarketData(); // Initial fetch
-    setInterval(fetchMarketData, 3000); // Fetch every 3 seconds
+    initializeApp();
 });
