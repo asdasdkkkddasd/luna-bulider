@@ -72,7 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
             lastFill: null, // Tracks last fill for order book flash animation
             tpPrice: null, // TP price for current position
             slPrice: null, // SL price for current position
-            drag: { active: false, kind: null }, // Drag state for TP/SL lines
+            drag: { active: false, kind: null, orderId: null }, // Drag state for TP/SL and LIMIT lines
             tpSl: { // TP/SL trigger state
                 activeCloseOrderId: null, // ID of the market order created by TP/SL trigger
                 lastTrigger: null,        // "TP" | "SL" | null
@@ -369,6 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderOrderBook(); // Render order book with new data
             renderTape(); // Render trade tape with new data
             syncPositionLines(); // Update chart lines (ENTRY, TP, SL)
+            syncLimitOrderLines(); // Update chart lines for LIMIT orders
         } catch (error) {
             console.error("Error rendering price:", error);
         }
@@ -583,7 +584,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let entryLine = null, tpLine = null, slLine = null;
     let entryTag = null, tpTag = null, slTag = null;
 
-    // Helper to create or get an overlay tag element
+    // LIMIT 주문 라인 관리 (orderId -> { line, tag })
+    const limitLines = new Map(); // key: orderId
+
+    // Helper to create or get an overlay tag element for TP/SL/Entry
     function ensureTag(kind) {
         if (!overlayEl) return null;
         let el = overlayEl.querySelector(`.line-tag.${kind.toLowerCase()}`);
@@ -591,6 +595,20 @@ document.addEventListener('DOMContentLoaded', () => {
             el = document.createElement('div');
             el.className = `line-tag ${kind.toLowerCase()}`;
             el.dataset.kind = kind;
+            overlayEl.appendChild(el);
+        }
+        return el;
+    }
+
+    // Helper to create or get an overlay tag element for LIMIT orders
+    function ensureLimitTag(orderId, side) {
+        if (!overlayEl) return null;
+        let el = overlayEl.querySelector(`.line-tag[data-order-id="${orderId}"]`);
+        if (!el) {
+            el = document.createElement('div');
+            el.className = `line-tag ${side === 'BUY' ? 'tp' : 'sl'}`; // Reuse tp/sl for color
+            el.dataset.kind = 'limit';
+            el.dataset.orderId = String(orderId);
             overlayEl.appendChild(el);
         }
         return el;
@@ -682,6 +700,64 @@ document.addEventListener('DOMContentLoaded', () => {
         if (sy != null) setTag(slTag, sy, `SL ${state.ui.slPrice.toFixed(2)}`); else hideTag(slTag);
     }
 
+    // Sync chart lines for open LIMIT orders
+    function syncLimitOrderLines() {
+        if (!candleSeries) return;
+
+        // 1) Get current open LIMIT orders
+        const openLimits = Object.values(state.orders).filter(o =>
+            o.type === 'LIMIT' && (o.status === 'NEW' || o.status === 'PARTIAL') && o.symbol === SYMBOL
+        );
+
+        const aliveIds = new Set(openLimits.map(o => o.orderId));
+
+        // 2) Remove lines/tags for orders that are no longer active
+        for (const [orderId, obj] of limitLines.entries()) {
+            if (!aliveIds.has(orderId)) {
+                try { candleSeries.removePriceLine(obj.line); } catch (e) { console.warn("Error removing price line:", e); }
+                if (obj.tag && obj.tag.parentNode) obj.tag.parentNode.removeChild(obj.tag);
+                limitLines.delete(orderId);
+            }
+        }
+
+        // 3) Create/Update lines and tags for active LIMIT orders
+        openLimits.forEach(order => {
+            const existing = limitLines.get(order.orderId);
+
+            const color = (order.side === 'BUY') ? '#0ecb81' : '#f6465d'; // Green for BUY, Red for SELL
+            const title = `${order.side} LIMIT`;
+
+            if (!existing) {
+                const line = candleSeries.createPriceLine({
+                    price: order.price,
+                    color,
+                    lineWidth: 1, // Thinner line for limit orders
+                    lineStyle: 2, // Dotted line
+                    axisLabelVisible: true,
+                    title,
+                });
+
+                const tag = ensureLimitTag(order.orderId, order.side);
+                limitLines.set(order.orderId, { line, tag, side: order.side });
+            } else {
+                existing.line.applyOptions({ price: order.price });
+                existing.side = order.side;
+            }
+
+            // Update tag position and text
+            const y = priceToY(order.price);
+            const obj = limitLines.get(order.orderId);
+            if (obj && obj.tag && y != null) {
+                const remaining = (order.qty - order.filledQty);
+                obj.tag.style.top = `${y}px`;
+                obj.tag.style.display = 'block';
+                obj.tag.textContent = `${order.side} LIMIT ${order.price.toFixed(2)} (${remaining.toFixed(4)})`;
+            } else if (obj && obj.tag) {
+                hideTag(obj.tag);
+            }
+        });
+    }
+
     // --- TP/SL DRAG LOGIC ---
     function pickLineKindByY(y) {
         const tol = 8; // Tolerance in pixels
@@ -694,14 +770,28 @@ document.addEventListener('DOMContentLoaded', () => {
         return null;
     }
 
+    // Pick nearest LIMIT order line for dragging
+    function pickNearestLimitLine(y) {
+        let best = null; // { orderId, dist }
+        for (const [orderId, obj] of limitLines.entries()) {
+            const order = state.orders[orderId];
+            if (!order || order.status !== 'NEW' && order.status !== 'PARTIAL') continue;
+            const ly = priceToY(order.price);
+            if (ly == null) continue;
+
+            const d = Math.abs(y - ly);
+            if (d <= 8 && (!best || d < best.dist)) {
+                best = { orderId, dist: d };
+            }
+        }
+        return best ? best.orderId : null;
+    }
+
     function clampTpSlToDirection(kind, price) {
         const pos = state.positions[SYMBOL];
-        if (!pos || pos.side === "FLAT") return price; // No position or flat, no clamping
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return price;
 
-        // Ensure TP is above entry for LONG, below for SHORT
-        // Ensure SL is below entry for LONG, above for SHORT
-        // And always ensure TP/SL are not crossing each other or the entry price (minimum TICK_SIZE away)
-        const minDistance = TICK_SIZE;
+        const minDistance = TICK_SIZE; // Min distance from entry price
 
         if (pos.side === "LONG") {
             if (kind === "TP") return Math.max(price, pos.entryPrice + minDistance);
@@ -724,38 +814,76 @@ document.addEventListener('DOMContentLoaded', () => {
                 const p = yToPrice(y);
                 if (p == null) return;
 
-                const kind = state.ui.drag.kind;
-                const fixed = clampTpSlToDirection(kind, p); // Clamp to ensure valid TP/SL prices
+                const newPrice = roundToTick(p); // Snap to tick size
 
-                if (kind === "TP") state.ui.tpPrice = fixed;
-                if (kind === "SL") state.ui.slPrice = fixed;
+                if (state.ui.drag.kind === "TP" || state.ui.drag.kind === "SL") {
+                    const fixed = clampTpSlToDirection(state.ui.drag.kind, newPrice);
+                    if (state.ui.drag.kind === "TP") state.ui.tpPrice = fixed;
+                    if (state.ui.drag.kind === "SL") state.ui.slPrice = fixed;
 
-                syncPositionLines();
-                overlayEl.classList.add('dragging');
-                return;
+                    syncPositionLines();
+                    overlayEl.classList.add('dragging');
+                    return;
+                }
+
+                if (state.ui.drag.kind === "LIMIT") {
+                    const orderId = state.ui.drag.orderId;
+                    const order = state.orders[orderId];
+                    if (!order || order.type !== 'LIMIT') return;
+
+                    // Update order price and re-add to order book
+                    removeOrderFromBook(order);
+                    order.price = newPrice;
+                    addLimitOrderToBook(order);
+
+                    // Update UI immediately (line and order list)
+                    syncLimitOrderLines();
+                    renderOrders();
+                    overlayEl.classList.add('dragging');
+                    return;
+                }
             }
 
             // If not dragging, show cursor hint
             const k = pickLineKindByY(y);
-            overlayEl.style.cursor = k ? 'ns-resize' : 'default';
+            const oid = pickNearestLimitLine(y);
+
+            if (k || oid != null) { overlayEl.style.cursor = 'ns-resize'; return; }
+            overlayEl.style.cursor = 'default';
         });
 
         overlayEl.addEventListener('mousedown', (e) => {
             const rect = overlayEl.getBoundingClientRect();
             const y = e.clientY - rect.top;
-            const k = pickLineKindByY(y);
-            if (!k) return;
 
-            state.ui.drag.active = true;
-            state.ui.drag.kind = k;
-            overlayEl.classList.add('dragging');
-            e.preventDefault(); // Prevent default browser drag behavior
+            // 1) Prioritize TP/SL first
+            const k = pickLineKindByY(y);
+            if (k) {
+                state.ui.drag.active = true;
+                state.ui.drag.kind = k;
+                state.ui.drag.orderId = null;
+                overlayEl.classList.add('dragging');
+                e.preventDefault();
+                return;
+            }
+
+            // 2) Then check for LIMIT lines
+            const oid = pickNearestLimitLine(y);
+            if (oid != null) {
+                state.ui.drag.active = true;
+                state.ui.drag.kind = "LIMIT";
+                state.ui.drag.orderId = oid;
+                overlayEl.classList.add('dragging');
+                e.preventDefault();
+                return;
+            }
         });
 
         window.addEventListener('mouseup', () => {
             if (!state.ui.drag.active) return;
             state.ui.drag.active = false;
             state.ui.drag.kind = null;
+            state.ui.drag.orderId = null; // Clear orderId for LIMIT orders
             overlayEl.classList.remove('dragging');
         });
     }
