@@ -44,14 +44,16 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         positions: {}, // Keyed by symbol, e.g., 'BTC-USDT' -> Position object
         orders: {},    // Keyed by orderId
-        trades: {},    // Keyed by tradeId
+        trades: {},    // Keyed by tradeId (Note: not fully used yet, but placeholder)
         ledger: [],    // Array of all financial events
         
         // --- Client-side UI state ---
         ui: {
             orderType: 'limit',
             lastPrice: 60000,
-            currentPrice: 60000,
+            currentPrice: 60000, // This will become markPrice for simplicity
+            bidPrice: 59950, // For spread simulation
+            askPrice: 60050, // For spread simulation
         },
         
         // --- Sequence for IDs ---
@@ -105,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
         Object.values(state.positions).forEach(pos => {
             if (pos.status === 'OPEN' && pos.qty > 0) {
                 // Update position-specific markPrice and unrealizedPnl
-                pos.markPrice = state.ui.currentPrice;
+                pos.markPrice = state.ui.currentPrice; // Using markPrice as currentPrice for MVP
                 pos.unrealizedPnl = calcUnrealizedPnl(pos, pos.markPrice);
                 
                 unrealizedPnlTotal += pos.unrealizedPnl;
@@ -125,7 +127,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // 3. Calculate availableBalance (funds not locked by orders)
         let lockedByOrders = 0;
         Object.values(state.orders).forEach(o => {
-            if (o.status === 'NEW' && o.lockedMarginAmount > 0) {
+            // Only count NEW or PARTIAL orders that haven't been filled yet
+            if ((o.status === 'NEW' || o.status === 'PARTIAL') && o.lockedMarginAmount > 0) {
                 lockedByOrders += o.lockedMarginAmount;
             }
         });
@@ -223,16 +226,16 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderPrice() {
         try {
             if (currentPriceEl) {
-                currentPriceEl.textContent = state.ui.currentPrice.toFixed(2);
-                if (state.ui.currentPrice > state.ui.lastPrice) {
-                    currentPriceEl.className = 'price-up';
-                } else if (state.ui.currentPrice < state.ui.lastPrice) {
-                    currentPriceEl.className = 'price-down';
-                }
+                // Display bid/ask for realism
+                currentPriceEl.innerHTML = `Bid: <span class="price-down">${state.ui.bidPrice.toFixed(2)}</span> / Ask: <span class="price-up">${state.ui.askPrice.toFixed(2)}</span>`;
+                // The class should indicate overall trend if we had one
+                // currentPriceEl.className = state.ui.currentPrice > state.ui.lastPrice ? 'price-up' : 'price-down';
             }
-            updateAccountMetrics(); // Metrics depend on current price
-            renderOrders(); // Re-render orders as they might be filled
-            renderPositions(); // PnL updates with price
+            // updateAccountMetrics is called here, which updates position PnL
+            // renderOrders and renderPositions are called by renderPrice, no need to call twice
+            updateAccountMetrics(); 
+            renderOrders(); 
+            renderPositions(); 
         } catch (error) {
             console.error("Error rendering price:", error);
         }
@@ -302,17 +305,61 @@ document.addEventListener('DOMContentLoaded', () => {
         // renderOrders and renderPositions are called by renderPrice, no need to call twice
     }
 
+    // --- EXECUTE FILL FUNCTION (from user's prompt) ---
+    /**
+     * Executes a single fill for an order.
+     * @param {object} order - The order object.
+     * @param {number} fillPrice - The price at which to fill.
+     * @param {number} fillQty - The quantity to fill.
+     */
+    function executeFill(order, fillPrice, fillQty) {
+        // 1) tradeId 하나만 생성
+        const tradeId = state.nextTradeId++;
+
+        // 2) 포지션 업데이트
+        // Ensure position exists or create a FLAT one for applyFillNet
+        const currentPosition = state.positions[order.symbol] || { side: "FLAT", qty: 0, entryPrice: 0, status: "CLOSED" };
+        const fill = { side: /** @type {Side} */(order.side), qty: fillQty, price: fillPrice };
+        const { pos: updatedPosition, realizedPnl } = applyFillNet(currentPosition, fill);
+
+        // 3) realized pnl
+        if (realizedPnl !== 0) addToLedger('REALIZED_PNL', realizedPnl, { orderId: order.orderId, tradeId, symbol: order.symbol });
+
+        // 4) fee
+        const fee = Math.abs(fillPrice * fillQty) * FEE_RATE;
+        addToLedger('FEE', -fee, { orderId: order.orderId, tradeId, symbol: order.symbol });
+
+        // 5) 포지션 저장
+        if (updatedPosition.qty === 0 || updatedPosition.side === "FLAT") {
+            delete state.positions[order.symbol];
+        } else {
+            state.positions[order.symbol] = {
+                ...updatedPosition,
+                symbol: order.symbol,
+                leverage: LEVERAGE,
+                marginMode: 'CROSS',
+                status: 'OPEN',
+                updatedAt: new Date(),
+            };
+        }
+
+        // 6) 주문 업데이트
+        order.filledQty += fillQty;
+        order.status = (order.filledQty >= order.qty) ? 'FILLED' : 'PARTIAL';
+    }
+
+
     // --- CORE TRADING LOGIC ---
     function placeOrder(side) {
         const type = state.ui.orderType.toUpperCase();
-        const price = type === 'MARKET' ? state.ui.currentPrice : parseFloat(priceInput.value);
+        const price = type === 'MARKET' ? (side === 'BUY' ? state.ui.askPrice : state.ui.bidPrice) : parseFloat(priceInput.value);
         const qty = parseFloat(quantityInput.value);
         const symbol = SYMBOL; 
 
-        // --- Client-side Safety Checks (from user's prompt #6) ---
+        // --- Client-side Safety Checks (from user's prompt #6 and #0) ---
         if (isNaN(qty) || qty <= 0) { alert('Invalid quantity. Must be a positive number.'); return; }
         if (type === 'LIMIT' && (isNaN(price) || price <= 0)) { alert('Invalid price. Must be a positive number for Limit orders.'); return; }
-        if (type === 'MARKET' && (isNaN(state.ui.currentPrice) || state.ui.currentPrice <= 0)) { alert('Current market price is invalid. Cannot place Market order.'); return; }
+        if (type === 'MARKET' && (isNaN(price) || price <= 0)) { alert('Current market price (bid/ask) is invalid. Cannot place Market order.'); return; } // Check the derived price for market orders
         
         const initialOrderMargin = (price * qty) / LEVERAGE;
         if (initialOrderMargin <= 0) { alert('Calculated order margin is zero or negative. Please check price/quantity.'); return; }
@@ -324,7 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const orderId = state.nextOrderId++;
         const order = {
             orderId, symbol, type, side, qty,
-            price: type === 'LIMIT' ? price : state.ui.currentPrice, // Store current price for market orders as a reference for margin
+            price: price, // Use the price determined by order type (limit or bid/ask)
             filledQty: 0,
             status: 'NEW',
             lockedMarginAmount: initialOrderMargin, // Store the exact amount locked for this order
@@ -332,9 +379,8 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         state.orders[orderId] = order;
 
-        // Reduce availableBalance for the order
-        state.user.availableBalance -= order.lockedMarginAmount;
-        updateAccountMetrics(); // Update metrics after availableBalance change
+        // availableBalance is calculated by updateAccountMetrics. Do not manually modify here.
+        updateAccountMetrics(); // Re-calculate metrics after order changes lockedByOrders implicitly
         
         console.log(`Placed ${side} ${type} order for ${qty} ${symbol} @ ${order.price.toFixed(2)}. Margin locked: ${order.lockedMarginAmount.toFixed(2)}`);
         
@@ -349,9 +395,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         order.status = 'CANCELED';
         
-        // Return locked margin to availableBalance
-        state.user.availableBalance += order.lockedMarginAmount;
-        updateAccountMetrics(); // Update metrics after availableBalance change
+        // availableBalance is calculated by updateAccountMetrics. Do not manually modify here.
+        updateAccountMetrics(); // Re-calculate metrics after order changes lockedByOrders implicitly
         
         console.log(`Order ${orderId} canceled. Margin unlocked: ${order.lockedMarginAmount.toFixed(2)}`);
         
@@ -366,106 +411,65 @@ document.addEventListener('DOMContentLoaded', () => {
         const orderId = state.nextOrderId++;
         const order = {
             orderId, symbol, type: 'MARKET', side: position.side === 'LONG' ? 'SELL' : 'BUY', qty: position.qty,
-            price: state.ui.currentPrice,
-            filledQty: 0, status: 'NEW', reduceOnly: true, // reduceOnly is important for backend
+            price: position.side === 'LONG' ? state.ui.bidPrice : state.ui.askPrice, // Market close uses current opposite bid/ask
+            filledQty: 0, status: 'NEW', reduceOnly: true, 
             lockedMarginAmount: 0, // Closing orders don't lock new margin from available
             createdAt: new Date(),
         };
         state.orders[orderId] = order;
 
         console.log(`Placed market order ${orderId} to close ${symbol} position.`);
-        renderOrders(); // Only render orders for now, will be filled in next cycle
+        renderOrders(); 
     }
 
     function tryFillOrders() {
         Object.values(state.orders).forEach(order => {
             if (order.status !== 'NEW') return;
             
-            const shouldFill = (order.type === 'MARKET') ||
-                               (order.side === 'BUY' && state.ui.currentPrice <= order.price) ||
-                               (order.side === 'SELL' && state.ui.currentPrice >= order.price);
-            
-            if (shouldFill) {
-                const fillPrice = order.type === 'MARKET' ? state.ui.currentPrice : order.price;
-                
-                order.status = 'FILLED';
-                order.filledQty = order.qty;
-
-                // Return locked margin for this order to availableBalance (it was consumed by fill)
-                // Note: In a real system, availableBalance would be managed on server with ledger.
-                state.user.availableBalance += order.lockedMarginAmount;
-
-                // --- Apply fill to position ---
-                const currentPosition = state.positions[order.symbol] || { side: "FLAT", qty: 0, entryPrice: 0, status: "CLOSED" };
-                const fill = { side: /** @type {Side} */(order.side), qty: order.qty, price: fillPrice }; // Type assertion
-
-                const { pos: updatedPosition, realizedPnl } = applyFillNet(currentPosition, fill);
-
-                // --- Handle Realized PnL ---
-                if (realizedPnl !== 0) {
-                    addToLedger('REALIZED_PNL', realizedPnl, { orderId: order.orderId, tradeId: state.nextTradeId++, symbol: order.symbol });
+            const fillPrice = order.side === 'BUY' ? state.ui.askPrice : state.ui.bidPrice; // Market fill price
+            if (order.type === 'LIMIT') {
+                if ((order.side === 'BUY' && state.ui.bidPrice >= order.price) ||
+                    (order.side === 'SELL' && state.ui.askPrice <= order.price)) {
+                    // Fill at order price for limit order if condition met
+                    executeFill(order, order.price, order.qty);
                 }
-
-                // --- Handle Fees ---
-                const fee = (fillPrice * order.qty) * FEE_RATE; 
-                addToLedger('FEE', -fee, { orderId: order.orderId, tradeId: state.nextTradeId++, symbol: order.symbol });
-
-                // --- Update Position State ---
-                if (updatedPosition.qty === 0 || updatedPosition.side === "FLAT") {
-                    delete state.positions[order.symbol]; // Position fully closed
-                } else {
-                    state.positions[order.symbol] = {
-                        ...updatedPosition,
-                        symbol: order.symbol,
-                        leverage: LEVERAGE, // Maintain leverage for display/rule
-                        marginMode: 'CROSS',
-                        status: 'OPEN',
-                        updatedAt: new Date(),
-                    };
-                }
-                
-                console.log(`Order ${order.orderId} filled. New position: ${updatedPosition.side} ${updatedPosition.qty} @ ${updatedPosition.entryPrice.toFixed(2)}. Realized PnL: ${realizedPnl.toFixed(2)}`);
+            } else { // MARKET order
+                executeFill(order, fillPrice, order.qty);
             }
         });
     }
 
     function checkLiquidation() {
         // Cross liquidation trigger: equity <= maintenanceMarginTotal
-        // Only check if there are open positions and user is not already liquidated (equity > 0)
         if (Object.keys(state.positions).length > 0 && state.user.equity > 0 && state.user.equity <= state.user.maintenanceMarginTotal) {
             console.warn(`ACCOUNT LIQUIDATED! Equity: ${state.user.equity.toFixed(2)}, Maintenance Margin Total: ${state.user.maintenanceMarginTotal.toFixed(2)}`);
+            alert(`Your account has been liquidated! Your wallet balance was ${state.user.walletBalance.toFixed(2)} USDT.`);
             
-            // The actual capital lost on liquidation
-            const liquidationLossAmount = state.user.walletBalance; // Simplified: entire wallet balance is lost
-
-            // Clear all positions
+            // --- MVP Liquidation: Create market orders to close all positions ---
             Object.values(state.positions).forEach(pos => {
-                // For each liquidated position, record its PnL as realized
-                let unrealizedPnlAtLiquidation;
-                if (pos.side === 'LONG') {
-                    unrealizedPnlAtLiquidation = pos.qty * (state.ui.currentPrice - pos.entryPrice);
-                } else {
-                    unrealizedPnlAtLiquidation = pos.qty * (pos.entryPrice - state.ui.currentPrice);
-                }
-                addToLedger('REALIZED_PNL', unrealizedPnlAtLiquidation, { symbol: pos.symbol, type: 'liquidation' });
-                // Any specific liquidation fee would also be added here
-                // For MVP, total walletBalance is considered lost and reset to 0 in UI below.
-                // In a real system, the exact loss amount would be calculated more precisely based on account equity vs zero.
+                // Create a market order to close this position
+                const orderId = state.nextOrderId++;
+                const order = {
+                    orderId, symbol: pos.symbol, type: 'MARKET', side: pos.side === 'LONG' ? 'SELL' : 'BUY', qty: pos.qty,
+                    price: pos.side === 'LONG' ? state.ui.bidPrice : state.ui.askPrice, // Market close uses current opposite bid/ask
+                    filledQty: 0, status: 'NEW', reduceOnly: true, 
+                    lockedMarginAmount: 0, 
+                    createdAt: new Date(),
+                };
+                state.orders[orderId] = order;
+                // These liquidation orders will be filled in the next tryFillOrders cycle.
             });
-            
-            state.positions = {}; // All positions gone
-            
-            // Deduct the total wallet balance as a single liquidation fee
-            addToLedger('LIQUIDATION_FEE', -liquidationLossAmount, { uid: state.user.uid, description: "Account full liquidation" });
 
-            // Reset user metrics after liquidation
-            state.user.walletBalance = 0;
-            state.user.availableBalance = 0;
-            state.user.unrealizedPnlTotal = 0;
-            state.user.maintenanceMarginTotal = 0;
-            state.user.equity = 0;
+            // The actual PnL and fee for these liquidation orders will be recorded through executeFill
+            // once they are processed in tryFillOrders. This aligns with the natural flow.
             
-            alert('Your account has been liquidated!');
+            // Simplified: Force-clear positions immediately for UI, but ledger reflects real PnL/Fee from fill
+            state.positions = {}; 
+
+            // After all orders are processed, the walletBalance will reflect the actual loss
+            // No direct walletBalance = 0 manipulation here. It will be naturally adjusted.
+            
+            updateAccountMetrics(); // Recalculate everything after liquidation orders are created
         }
     }
 
@@ -506,10 +510,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- SIMULATION ---
     function startSimulation() {
         setInterval(() => {
-            state.ui.lastPrice = state.ui.currentPrice;
-            const change = (Math.random() - 0.5) * 50; 
-            state.ui.currentPrice += change;
+            state.ui.lastPrice = state.ui.currentPrice; // Save mark price
+            
+            // Simulate bid/ask spread
+            const baseChange = (Math.random() - 0.5) * 50; 
+            state.ui.currentPrice += baseChange; // markPrice
             if(state.ui.currentPrice <= 0) state.ui.currentPrice = 100;
+
+            const spread = 50 * (Math.random() * 0.5 + 0.5); // Random spread 25-75
+            state.ui.bidPrice = state.ui.currentPrice - spread / 2;
+            state.ui.askPrice = state.ui.currentPrice + spread / 2;
+            if (state.ui.bidPrice < 0) state.ui.bidPrice = 0; // Ensure non-negative prices
+            if (state.ui.askPrice < 0) state.ui.askPrice = 0;
             
             tryFillOrders();
             checkLiquidation(); 
@@ -518,7 +530,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- INITIALIZATION ---
-    updateAccountMetrics(); // Initial calculation of equity/available
     renderAll();
     startSimulation();
     console.log('Script initialized and simulation started.');
