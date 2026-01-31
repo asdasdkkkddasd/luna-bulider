@@ -70,6 +70,9 @@ document.addEventListener('DOMContentLoaded', () => {
             bidPrice: 59995,   // For spread
             askPrice: 60005,   // For spread
             lastFill: null, // Tracks last fill for order book flash animation
+            tpPrice: null, // TP price for current position
+            slPrice: null, // SL price for current position
+            drag: { active: false, kind: null }, // Drag state for TP/SL lines
         },
         
         // --- Sequence for IDs ---
@@ -94,9 +97,39 @@ document.addEventListener('DOMContentLoaded', () => {
     const asksBodyEl = document.getElementById('asks-body');
     const bidsBodyEl = document.getElementById('bids-body');
     const tapeBodyEl = document.getElementById('tape-body');
+    // Chart DOM elements
+    const chartEl = document.getElementById('chart');
+    const overlayEl = document.getElementById('chart-overlay');
 
-    console.log('DOM Elements obtained:', { bidPriceEl, askPriceEl, balanceDisplayEl, ordersBodyEl, positionsBodyEl, buyBtn, sellBtn, priceInput, quantityInput, limitOrderInputs, tabs, asksBodyEl, bidsBodyEl, tapeBodyEl });
 
+    console.log('DOM Elements obtained:', { bidPriceEl, askPriceEl, balanceDisplayEl, ordersBodyEl, positionsBodyEl, buyBtn, sellBtn, priceInput, quantityInput, limitOrderInputs, tabs, asksBodyEl, bidsBodyEl, tapeBodyEl, chartEl, overlayEl });
+
+    // --- CHART INITIALIZATION ---
+    let chart, candleSeries;
+    if (chartEl && window.LightweightCharts) {
+        chart = LightweightCharts.createChart(chartEl, {
+            layout: { backgroundColor: 'transparent', textColor: '#eaecef' },
+            grid: { vertLines: { color: 'rgba(255,255,255,0.06)' }, horzLines: { color: 'rgba(255,255,255,0.06)' } },
+            rightPriceScale: { borderColor: 'rgba(255,255,255,0.12)' },
+            timeScale: { borderColor: 'rgba(255,255,255,0.12)' },
+            crosshair: { mode: 0 },
+        });
+
+        candleSeries = chart.addCandlestickSeries({
+            upColor: '#089981', // green
+            downColor: '#f23645', // red
+            borderDownColor: '#f23645',
+            borderUpColor: '#089981',
+            wickDownColor: '#f23645',
+            wickUpColor: '#089981',
+        });
+        
+        // Resize chart with window
+        new ResizeObserver(entries => {
+            if (entries.length === 0 || entries[0].contentRect.width === 0) return;
+            chart.applyOptions({ width: entries[0].contentRect.width });
+        }).observe(chartEl);
+    }
 
     // --- LEDGER & ACCOUNT METRICS LOGIC ---
     /**
@@ -331,6 +364,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderPositions(); // PnL updates with price
             renderOrderBook(); // Render order book with new data
             renderTape(); // Render trade tape with new data
+            syncPositionLines(); // Update chart lines (ENTRY, TP, SL)
         } catch (error) {
             console.error("Error rendering price:", error);
         }
@@ -531,6 +565,186 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
+    // --- CHART PRICE LINE MANAGEMENT ---
+    let entryLine = null, tpLine = null, slLine = null;
+    let entryTag = null, tpTag = null, slTag = null;
+
+    // Helper to create or get an overlay tag element
+    function ensureTag(kind) {
+        if (!overlayEl) return null;
+        let el = overlayEl.querySelector(`.line-tag.${kind.toLowerCase()}`);
+        if (!el) {
+            el = document.createElement('div');
+            el.className = `line-tag ${kind.toLowerCase()}`;
+            el.dataset.kind = kind;
+            overlayEl.appendChild(el);
+        }
+        return el;
+    }
+
+    // Helper to set position and text of a tag
+    function setTag(el, y, text) {
+        if (!el) return;
+        el.style.top = `${y}px`;
+        el.textContent = text;
+        el.style.display = 'block';
+    }
+
+    // Helper to hide a tag
+    function hideTag(el){ if (el) el.style.display = 'none'; }
+
+    // Convert price to Y coordinate on the chart
+    function priceToY(price){
+        if (!candleSeries) return null;
+        return candleSeries.priceToCoordinate(price);
+    }
+
+    // Convert Y coordinate to price on the chart
+    function yToPrice(y){
+        if (!candleSeries) return null;
+        return candleSeries.coordinateToPrice(y);
+    }
+
+    function syncPositionLines() {
+        if (!chart || !candleSeries || !overlayEl) return;
+
+        const pos = state.positions[SYMBOL];
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") {
+            // If no position, hide all lines and tags
+            if (entryLine) { candleSeries.removePriceLine(entryLine); entryLine = null; }
+            if (tpLine) { candleSeries.removePriceLine(tpLine); tpLine = null; }
+            if (slLine) { candleSeries.removePriceLine(slLine); slLine = null; }
+            hideTag(entryTag); hideTag(tpTag); hideTag(slTag);
+            state.ui.tpPrice = null; state.ui.slPrice = null; // Reset TP/SL state
+            return;
+        }
+
+        // Initialize TP/SL prices if not set
+        if (state.ui.tpPrice == null || state.ui.slPrice == null) {
+            const base = pos.entryPrice;
+            const step = base * 0.004; // 0.4% default
+            if (pos.side === "LONG") {
+                state.ui.tpPrice = base + step;
+                state.ui.slPrice = base - step;
+            } else { // SHORT
+                state.ui.tpPrice = base - step;
+                state.ui.slPrice = base + step;
+            }
+        }
+
+        // ENTRY Line
+        if (!entryLine) {
+            entryLine = candleSeries.createPriceLine({ price: pos.entryPrice, color: '#f7a600', lineWidth: 2, lineStyle: 0, axisLabelVisible: true, title: 'ENTRY' });
+            entryTag = ensureTag('entry');
+        } else {
+            entryLine.applyOptions({ price: pos.entryPrice });
+        }
+
+        // TP Line
+        if (!tpLine) {
+            tpLine = candleSeries.createPriceLine({ price: state.ui.tpPrice, color: '#0ecb81', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'TP' });
+            tpTag = ensureTag('tp');
+        } else {
+            tpLine.applyOptions({ price: state.ui.tpPrice });
+        }
+
+        // SL Line
+        if (!slLine) {
+            slLine = candleSeries.createPriceLine({ price: state.ui.slPrice, color: '#f6465d', lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: 'SL' });
+            slTag = ensureTag('sl');
+        } else {
+            slLine.applyOptions({ price: state.ui.slPrice });
+        }
+
+        // Update tag positions and text
+        const ey = priceToY(pos.entryPrice);
+        const ty = priceToY(state.ui.tpPrice);
+        const sy = priceToY(state.ui.slPrice);
+
+        if (ey != null) setTag(entryTag, ey, `ENTRY ${pos.entryPrice.toFixed(2)}`); else hideTag(entryTag);
+        if (ty != null) setTag(tpTag, ty, `TP ${state.ui.tpPrice.toFixed(2)}`); else hideTag(tpTag);
+        if (sy != null) setTag(slTag, sy, `SL ${state.ui.slPrice.toFixed(2)}`); else hideTag(slTag);
+    }
+
+    // --- TP/SL DRAG LOGIC ---
+    function pickLineKindByY(y) {
+        const tol = 8; // Tolerance in pixels
+
+        const tpY = state.ui.tpPrice != null ? priceToY(state.ui.tpPrice) : null;
+        const slY = state.ui.slPrice != null ? priceToY(state.ui.slPrice) : null;
+
+        if (tpY != null && Math.abs(y - tpY) <= tol) return "TP";
+        if (slY != null && Math.abs(y - slY) <= tol) return "SL";
+        return null;
+    }
+
+    function clampTpSlToDirection(kind, price) {
+        const pos = state.positions[SYMBOL];
+        if (!pos || pos.side === "FLAT") return price; // No position or flat, no clamping
+
+        // Ensure TP is above entry for LONG, below for SHORT
+        // Ensure SL is below entry for LONG, above for SHORT
+        // And always ensure TP/SL are not crossing each other or the entry price (minimum TICK_SIZE away)
+        const minDistance = TICK_SIZE;
+
+        if (pos.side === "LONG") {
+            if (kind === "TP") return Math.max(price, pos.entryPrice + minDistance);
+            if (kind === "SL") return Math.min(price, pos.entryPrice - minDistance);
+        } else { // SHORT
+            if (kind === "TP") return Math.min(price, pos.entryPrice - minDistance);
+            if (kind === "SL") return Math.max(price, pos.entryPrice + minDistance);
+        }
+        return price;
+    }
+
+    function attachTpSlDrag() {
+        if (!overlayEl) return;
+
+        overlayEl.addEventListener('mousemove', (e) => {
+            const rect = overlayEl.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+
+            if (state.ui.drag.active) {
+                const p = yToPrice(y);
+                if (p == null) return;
+
+                const kind = state.ui.drag.kind;
+                const fixed = clampTpSlToDirection(kind, p); // Clamp to ensure valid TP/SL prices
+
+                if (kind === "TP") state.ui.tpPrice = fixed;
+                if (kind === "SL") state.ui.slPrice = fixed;
+
+                syncPositionLines();
+                overlayEl.classList.add('dragging');
+                return;
+            }
+
+            // If not dragging, show cursor hint
+            const k = pickLineKindByY(y);
+            overlayEl.style.cursor = k ? 'ns-resize' : 'default';
+        });
+
+        overlayEl.addEventListener('mousedown', (e) => {
+            const rect = overlayEl.getBoundingClientRect();
+            const y = e.clientY - rect.top;
+            const k = pickLineKindByY(y);
+            if (!k) return;
+
+            state.ui.drag.active = true;
+            state.ui.drag.kind = k;
+            overlayEl.classList.add('dragging');
+            e.preventDefault(); // Prevent default browser drag behavior
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (!state.ui.drag.active) return;
+            state.ui.drag.active = false;
+            state.ui.drag.kind = null;
+            overlayEl.classList.remove('dragging');
+        });
+    }
+
+
     // --- CORE TRADING LOGIC ---
     function placeOrder(side) {
         const type = state.ui.orderType.toUpperCase();
@@ -710,6 +924,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Attach order book click handler
     attachOrderBookClick();
+    // Attach TP/SL drag handler
+    attachTpSlDrag();
 
 
     // --- SIMULATION ---
@@ -732,6 +948,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- INITIALIZATION ---
+    // Fetch initial historical data for chart (example placeholder)
+    if (candleSeries) {
+        // In a real app, you'd fetch actual historical data
+        const historicalData = []; // Replace with actual data fetch
+        let time = Date.now() / 1000 - 1000 * 60 * 60 * 24; // 24 hours ago
+        for (let i = 0; i < 100; i++) { // 100 bars
+            const open = state.ui.currentPrice + rand(-500, 500);
+            const close = open + rand(-50, 50);
+            const high = Math.max(open, close) + rand(0, 100);
+            const low = Math.min(open, close) - rand(0, 100);
+            historicalData.push({ time: time + i * 60 * 60, open, high, low, close });
+        }
+        candleSeries.setData(historicalData);
+        chart.timeScale().fitContent(); // Fit chart to data
+    }
+
     updateBidAskFromMid(state.ui.currentPrice); 
     rebuildOrderBookFromMid(state.ui.currentPrice);
     updateAccountMetrics(); // Initial calculation of equity/available

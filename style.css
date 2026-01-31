@@ -6,7 +6,7 @@
     --border-color: #2a2e39;
     --price-up: #089981; /* BUY color */
     --price-down: #f23645; /* SELL color */
-    --accent-color: #2962ff;
+    --accent-color: #f7a600; /* Bybit yellow/orange for Entry/My orders */
     --buy: #089981; /* Alias for price-up */
     --sell: #f23645; /* Alias for price-down */
     --muted: #5e6673; /* For muted text */
@@ -321,3 +321,22 @@ tbody tr:last-child td {
 
 .flash-up{ animation: flashUp 450ms ease-out; }
 .flash-dn{ animation: flashDn 450ms ease-out; }
+
+
+/* Chart specific styles */
+.line-tag{
+  position:absolute;
+  right:10px;
+  transform: translateY(-50%);
+  font-size:12px;
+  padding:3px 8px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(0,0,0,.35);
+  pointer-events:none;
+}
+.line-tag.tp{ color: var(--buy); }
+.line-tag.sl{ color: var(--sell); }
+.line-tag.entry{ color: var(--accent-color); } /* Use accent color for consistency */
+
+.dragging { cursor: ns-resize !important; }

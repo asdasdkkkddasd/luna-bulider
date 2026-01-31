@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LUNA BIT - Futures Simulator</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script> <!-- Re-added Lightweight Charts CDN -->
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -20,6 +21,12 @@
 
     <main class="trading-layout">
         <div class="layout-column panel-trading">
+            <!-- Chart Container -->
+            <div id="chart-wrap" style="position:relative;">
+                <div id="chart" style="height:420px;"></div>
+                <div id="chart-overlay" style="position:absolute; inset:0; cursor:default;"></div>
+            </div>
+
             <div class="panel">
                 <div class="panel-header">
                     <h3>주문</h3>
