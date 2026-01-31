@@ -3,66 +3,148 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>모의 암호화폐 거래소</title>
+    <title>Bybit Ultimate Simulator - Full Option</title>
+    <script src="https://unpkg.com/lightweight-charts @3.8.0/dist/lightweight-charts.standalone.production.js"></script>
     <link rel="stylesheet" href="style.css">
-    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
-    <div class="container">
-        <header>
-            <h1>Crypto Mock Trader</h1>
-        </header>
-        
-        <main>
-            <section class="market-data">
-                <h2>실시간 차트 (Upbit, 1분)</h2>
-                <div class="charts">
-                    <div class="chart-container">
-                        <div class="chart-header">
-                            <h3>Bitcoin (KRW-BTC)</h3>
-                            <div class="live-price" id="btc-live-price">Loading...</div>
-                        </div>
-                        <div id="btc-chart"></div>
-                    </div>
-                    <div class="chart-container">
-                        <div class="chart-header">
-                            <h3>Ethereum (KRW-ETH)</h3>
-                            <div class="live-price" id="eth-live-price">Loading...</div>
-                        </div>
-                        <div id="eth-chart"></div>
-                    </div>
-                </div>
-            </section>
-            
-            <section class="trading-panel">
-                <h2>거래</h2>
-                <div class="trade-form">
-                    <select id="crypto-select">
-                        <option value="BTC">Bitcoin (BTC)</option>
-                        <option value="ETH">Ethereum (ETH)</option>
-                    </select>
-                    <input type="number" id="trade-amount" placeholder="수량" min="0">
-                    <button id="buy-btn">매수</button>
-                    <button id="sell-btn">매도</button>
-                </div>
-            </section>
-            
-            <section class="portfolio">
-                <h2>내 자산</h2>
-                <div class="balance">
-                    <p>현금 (KRW): <span id="cash-balance">Loading...</span></p>
-                </div>
-                <div class="holdings">
-                    <p>BTC: <span id="btc-holding">Loading...</span></p>
-                    <p>ETH: <span id="eth-holding">Loading...</span></p>
-                </div>
-            </section>
-        </main>
-        
-        <footer>
-            <p>Data provided by Upbit. This is a simulation and does not involve real money.</p>
-        </footer>
+
+<header>
+    <div class="logo" ondblclick="resetData()" title="더블클릭 시 데이터 초기화">
+        <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zm0 9l2.5-1.25L12 8.5 9.5 9.75 12 11zm0 2.5l-5-2.5-5 2.5 10 5 10-5-5-2.5-5 2.5z"/></svg>
+        BYBIT <span>PRO</span>
     </div>
-    <script src="main.js"></script>
+    <div class="ticker-group">
+        <div class="tg-item"><span class="tg-label">BTCUSDT</span><span class="tg-val" id="head-price">--</span></div>
+        <div class="tg-item"><span class="tg-label">24H 변동</span><span class="tg-val" id="head-chg">--%</span></div>
+        <div class="tg-item"><span class="tg-label">24H 고가</span><span class="tg-val" id="head-high">--</span></div>
+        <div class="tg-item"><span class="tg-label">24H 저가</span><span class="tg-val" id="head-low">--</span></div>
+    </div>
+    <div class="header-right">
+        <span style="color:var(--up)">● Real-time Connected</span>
+        <div class="clock-badge" id="clock">00:00:00</div>
+    </div>
+</header>
+
+<div class="layout">
+    <div class="col-chart">
+        <div class="chart-toolbar">
+            <div class="tf-btn active" onclick="setTF('D')">1D</div>
+            <div class="tf-btn" onclick="setTF('240')">4H</div>
+            <div class="tf-btn" onclick="setTF('60')">1H</div>
+            <div class="tf-btn" onclick="setTF('15')">15m</div>
+            <div class="tf-btn" onclick="setTF('5')">5m</div>
+            <div class="tf-btn" onclick="setTF('1')">1m</div>
+        </div>
+        <div id="chart-container">
+            <div class="draw-tools">
+                <div class="dt-btn active" onclick="setTool('cursor')">➤<span class="dt-tooltip">선택</span></div>
+                <div class="dt-btn" onclick="setTool('line')">／<span class="dt-tooltip">추세선</span></div>
+                <div class="dt-btn" onclick="setTool('hline')">－<span class="dt-tooltip">가로줄</span></div>
+                <div class="dt-btn" onclick="setTool('eraser')">✕<span class="dt-tooltip">지우개</span></div>
+            </div>
+            <canvas id="draw-layer"></canvas>
+            <div class="pos-badge" id="pos-badge">
+                <div class="pb-content">
+                    <div class="pb-item"><span>P&L</span><b id="pb-pnl" class="text-up">+0.00</b></div>
+                    <div class="pb-item"><span>Qty</span><b id="pb-qty">0.000</b></div>
+                    <div class="pb-close" onclick="closePosition()">✕</div>
+                </div>
+            </div>
+        </div>
+        <div class="btm-panel">
+            <div class="btm-tabs">
+                <div class="btm-tab active">포지션 & 주문</div>
+                <div class="btm-tab">체결 내역</div>
+            </div>
+            <div class="btm-content">
+                <table id="pos-table">
+                    <thead><tr><th>계약</th><th>수량</th><th>가치</th><th>진입가</th><th>현재가</th><th>청산가</th><th>미실현 손익 (ROE%)</th><th>실현 손익 (수수료)</th><th>TP/SL</th><th>종료</th></tr></thead>
+                    <tbody id="pos-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-ob">
+        <div class="ob-header"><span>가격(USDT)</span><span>수량(BTC)</span><span>합계</span></div>
+        <div class="ob-container">
+            <div class="ob-list" id="asks" style="flex-direction:column-reverse;"></div>
+        </div>
+        <div class="mid-stats" id="mid-stats">
+            <span class="mid-price" id="mid-price">--</span>
+            <span class="mid-arrow" id="mid-arrow"></span>
+        </div>
+        <div class="ob-container">
+            <div class="ob-list" id="bids"></div>
+        </div>
+    </div>
+
+    <div class="col-trade">
+        <div class="ob-header" style="background:var(--bg-panel); border-bottom:1px solid var(--border);">
+            <span style="color:var(--accent); border-bottom:2px solid var(--accent); padding-bottom:12px;">일반 주문</span><span>조건부 주문</span>
+        </div>
+        <div class="trade-body">
+            <div class="bal-display"><span>사용 가능 자산</span><span class="bal-val"><span id="balance">100,000</span> USDT</span></div>
+            
+            <div class="margin-selector" onclick="openMarginModal()">
+                <span class="ms-label" id="margin-type">Cross</span>
+                <span class="ms-val" id="lev-disp">20x</span>
+            </div>
+
+            <div class="inp-group">
+                <span class="inp-label">주문 가격</span>
+                <div class="inp-wrap">
+                    <input type="number" id="inp-price" placeholder="시장가">
+                    <span class="inp-suffix">USDT</span>
+                </div>
+            </div>
+            
+            <div class="inp-group">
+                <span class="inp-label">수량</span>
+                <div class="inp-wrap">
+                    <input type="number" id="inp-qty" oninput="syncSlider(this.value)">
+                    <span class="inp-suffix">BTC</span>
+                </div>
+            </div>
+
+            <div class="slider-container">
+                <input type="range" id="slider-qty" min="0" max="100" value="0" step="1" oninput="setQtyPct(this.value)">
+                <div class="slider-marks"><span>0%</span><span>50%</span><span>100%</span></div>
+            </div>
+
+            <div class="cost-row">
+                <span>예상 비용</span>
+                <span style="color:#fff; font-family:var(--font-num)" id="cost-disp">0.00 USDT</span>
+            </div>
+
+            <div class="trade-btns">
+                <button class="btn-trade btn-long" onclick="openPos('long')">롱 오픈</button>
+                <button class="btn-trade btn-short" onclick="openPos('short')">숏 오픈</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal-mask" id="modal-margin">
+    <div class="modal">
+        <div class="m-head"><span>Margin Mode & Leverage</span><span class="m-close" onclick="closeModal('modal-margin')">✕</span></div>
+        <div class="mm-tabs">
+            <div class="mm-tab active" id="tab-cross" onclick="setMarginMode('Cross')">Cross (교차)</div>
+            <div class="mm-tab" id="tab-isolated" onclick="setMarginMode('Isolated')">Isolated (격리)</div>
+        </div>
+        <div style="margin-bottom:30px">
+            <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
+                <span style="font-weight:700; color:#ccc">Leverage</span><span style="color:var(--accent); font-weight:800; font-size:16px;" id="modal-lev-val">20x</span>
+            </div>
+            <input type="range" min="1" max="100" value="20" oninput="updateModalLev(this.value)">
+        </div>
+        <button class="m-btn" onclick="confirmMargin()">확인 (Confirm)</button>
+    </div>
+</div>
+
+<div id="toast">알림 메시지</div>
+
+<script src="main.js"></script>
 </body>
 </html>
