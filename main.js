@@ -214,7 +214,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // Fetch historical data
         const btcKline = await fetchUpbitKlineData('KRW-BTC');
         const ethKline = await fetchUpbitKlineData('KRW-ETH');
-        btcCandlestickSeries.setData(btckline);
+        btcCandlestickSeries.setData(btcKline);
         ethCandlestickSeries.setData(ethKline);
         
         // Start live updates
