@@ -1,14 +1,27 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="ko">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Hello World</title>
-  <link href='/style.css' rel='stylesheet'>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>사주팔자</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Hello, world!</h1>
-  <button onclick="console.log('hello');">Press me</button>
-  <script defer type="text/javascript" src="/main.js"></script>
+    <div class="container">
+        <h1>당신의 사주팔자를 알아보세요</h1>
+        <div class="input-container">
+            <label for="year">생년</label>
+            <input type="number" id="year" placeholder="예) 1990">
+            <label for="month">월</label>
+            <input type="number" id="month" placeholder="예) 1">
+            <label for="day">일</label>
+            <input type="number" id="day" placeholder="예) 1">
+            <label for="hour">시</label>
+            <input type="number" id="hour" placeholder="예) 13">
+            <button id="calculate-btn">결과 보기</button>
+        </div>
+        <div id="result"></div>
+    </div>
+    <script src="main.js"></script>
 </body>
 </html>
