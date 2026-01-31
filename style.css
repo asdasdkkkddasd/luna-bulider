@@ -1,24 +1,65 @@
+:root {
+    --bg-color: #f0f0f0;
+    --text-color: #333;
+    --container-bg: white;
+    --h1-color: #4a4a4a;
+    --label-color: #666;
+    --input-border: #ccc;
+    --btn-bg: #5a9;
+    --btn-hover-bg: #489;
+    --result-bg: #f9f9f9;
+    --result-border: #eee;
+}
+
+[data-theme='dark'] {
+    --bg-color: #333;
+    --text-color: #f0f0f0;
+    --container-bg: #4a4a4a;
+    --h1-color: white;
+    --label-color: #f0f0f0;
+    --input-border: #666;
+    --btn-bg: #489;
+    --btn-hover-bg: #5a9;
+    --result-bg: #666;
+    --result-border: #888;
+}
+
 body {
     font-family: sans-serif;
-    background-color: #f0f0f0;
-    color: #333;
+    background-color: var(--bg-color);
+    color: var(--text-color);
     display: flex;
     justify-content: center;
     align-items: center;
     min-height: 100vh;
     margin: 0;
+    transition: background-color 0.3s, color 0.3s;
 }
 
 .container {
-    background-color: white;
+    background-color: var(--container-bg);
     padding: 2rem;
     border-radius: 8px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
     text-align: center;
+    position: relative;
+}
+
+.theme-switcher {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    display: flex;
+    align-items: center;
+}
+
+.theme-switcher label {
+    font-size: 0.9rem;
+    margin-right: 0.5rem;
 }
 
 h1 {
-    color: #4a4a4a;
+    color: var(--h1-color);
     margin-bottom: 1.5rem;
 }
 
@@ -32,19 +73,21 @@ h1 {
 
 .input-container label {
     font-size: 0.9rem;
-    color: #666;
+    color: var(--label-color);
 }
 
 .input-container input {
     width: 60px;
     padding: 0.5rem;
-    border: 1px solid #ccc;
+    border: 1px solid var(--input-border);
     border-radius: 4px;
     text-align: center;
+    background-color: var(--container-bg);
+    color: var(--text-color);
 }
 
 #calculate-btn {
-    background-color: #5a9;
+    background-color: var(--btn-bg);
     color: white;
     border: none;
     padding: 0.75rem 1.5rem;
@@ -55,14 +98,14 @@ h1 {
 }
 
 #calculate-btn:hover {
-    background-color: #489;
+    background-color: var(--btn-hover-bg);
 }
 
 #result {
     margin-top: 1.5rem;
     padding: 1rem;
-    border: 1px solid #eee;
+    border: 1px solid var(--result-border);
     border-radius: 4px;
-    background-color: #f9f9f9;
+    background-color: var(--result-bg);
     min-height: 50px;
 }
