@@ -5,6 +5,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const LEVERAGE = 20; // Fixed leverage for MVP
     const MMR = 0.005; // Maintenance Margin Rate (0.5%)
     const FEE_RATE = 0.0004; // 0.04% fee per trade
+    const SPREAD_BPS = 2; // 2 bps = 0.02% (2/10000) - for spread calculation
     const SYMBOL = 'BTC-USDT'; // Hardcoded symbol
 
     // --- SHARED TYPES (from user's prompt, adapted to JS) ---
@@ -50,10 +51,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- Client-side UI state ---
         ui: {
             orderType: 'limit',
-            lastPrice: 60000,
-            currentPrice: 60000, // This will become markPrice for simplicity
-            bidPrice: 59950, // For spread simulation
-            askPrice: 60050, // For spread simulation
+            lastPrice: 60000, // Last markPrice
+            currentPrice: 60000, // Current markPrice (mid-price)
+            bidPrice: 59995,   // ✅ Added for spread
+            askPrice: 60005,   // ✅ Added for spread
         },
         
         // --- Sequence for IDs ---
@@ -63,7 +64,8 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // --- DOM ELEMENTS ---
-    const currentPriceEl = document.getElementById('current-price');
+    const bidPriceEl = document.getElementById('bid-price'); // New
+    const askPriceEl = document.getElementById('ask-price'); // New
     const balanceDisplayEl = document.getElementById('balance-display');
     const ordersBodyEl = document.getElementById('orders-body');
     const positionsBodyEl = document.getElementById('positions-body');
@@ -73,7 +75,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const quantityInput = document.getElementById('quantity');
     const limitOrderInputs = document.getElementById('limit-order-inputs');
     const tabs = document.querySelectorAll('.tab-btn');
-    console.log('DOM Elements obtained:', { currentPriceEl, balanceDisplayEl, ordersBodyEl, positionsBodyEl, buyBtn, sellBtn, priceInput, quantityInput, limitOrderInputs, tabs });
+    console.log('DOM Elements obtained:', { bidPriceEl, askPriceEl, balanceDisplayEl, ordersBodyEl, positionsBodyEl, buyBtn, sellBtn, priceInput, quantityInput, limitOrderInputs, tabs });
 
 
     // --- LEDGER & ACCOUNT METRICS LOGIC ---
@@ -133,6 +135,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         state.user.availableBalance = state.user.walletBalance - lockedByOrders;
+    }
+
+    // --- BID/ASK CALCULATION ---
+    function updateBidAskFromMid(mid) {
+        const halfSpread = mid * (SPREAD_BPS / 10000) / 2;
+        state.ui.bidPrice = Math.max(0.01, mid - halfSpread);
+        state.ui.askPrice = Math.max(state.ui.bidPrice + 0.01, mid + halfSpread); // Ensure ask > bid
     }
 
     // --- CORE FINANCIAL LOGIC FUNCTIONS (from user's prompt) ---
@@ -225,17 +234,13 @@ document.addEventListener('DOMContentLoaded', () => {
     
     function renderPrice() {
         try {
-            if (currentPriceEl) {
-                // Display bid/ask for realism
-                currentPriceEl.innerHTML = `Bid: <span class="price-down">${state.ui.bidPrice.toFixed(2)}</span> / Ask: <span class="price-up">${state.ui.askPrice.toFixed(2)}</span>`;
-                // The class should indicate overall trend if we had one
-                // currentPriceEl.className = state.ui.currentPrice > state.ui.lastPrice ? 'price-up' : 'price-down';
+            if (bidPriceEl && askPriceEl) {
+                bidPriceEl.textContent = state.ui.bidPrice.toFixed(2);
+                askPriceEl.textContent = state.ui.askPrice.toFixed(2);
             }
-            // updateAccountMetrics is called here, which updates position PnL
-            // renderOrders and renderPositions are called by renderPrice, no need to call twice
-            updateAccountMetrics(); 
-            renderOrders(); 
-            renderPositions(); 
+            updateAccountMetrics(); // Metrics depend on current price
+            renderOrders(); // Re-render orders as they might be filled
+            renderPositions(); // PnL updates with price
         } catch (error) {
             console.error("Error rendering price:", error);
         }
@@ -317,7 +322,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const tradeId = state.nextTradeId++;
 
         // 2) 포지션 업데이트
-        // Ensure position exists or create a FLAT one for applyFillNet
         const currentPosition = state.positions[order.symbol] || { side: "FLAT", qty: 0, entryPrice: 0, status: "CLOSED" };
         const fill = { side: /** @type {Side} */(order.side), qty: fillQty, price: fillPrice };
         const { pos: updatedPosition, realizedPnl } = applyFillNet(currentPosition, fill);
@@ -352,17 +356,21 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- CORE TRADING LOGIC ---
     function placeOrder(side) {
         const type = state.ui.orderType.toUpperCase();
-        const price = type === 'MARKET' ? (side === 'BUY' ? state.ui.askPrice : state.ui.bidPrice) : parseFloat(priceInput.value);
+        // Use bid/ask for market orders
+        const marketPrice = (side === 'BUY') ? state.ui.askPrice : state.ui.bidPrice; 
+        const price = type === 'MARKET' ? marketPrice : parseFloat(priceInput.value);
         const qty = parseFloat(quantityInput.value);
         const symbol = SYMBOL; 
 
         // --- Client-side Safety Checks (from user's prompt #6 and #0) ---
         if (isNaN(qty) || qty <= 0) { alert('Invalid quantity. Must be a positive number.'); return; }
         if (type === 'LIMIT' && (isNaN(price) || price <= 0)) { alert('Invalid price. Must be a positive number for Limit orders.'); return; }
-        if (type === 'MARKET' && (isNaN(price) || price <= 0)) { alert('Current market price (bid/ask) is invalid. Cannot place Market order.'); return; } // Check the derived price for market orders
+        // For market orders, check the derived marketPrice (bid/ask)
+        if (type === 'MARKET' && (isNaN(marketPrice) || marketPrice <= 0)) { alert('Current market price (bid/ask) is invalid. Cannot place Market order.'); return; }
         
         const initialOrderMargin = (price * qty) / LEVERAGE;
         if (initialOrderMargin <= 0) { alert('Calculated order margin is zero or negative. Please check price/quantity.'); return; }
+        // Check against available balance (calculated by updateAccountMetrics)
         if (initialOrderMargin > state.user.availableBalance) {
             alert(`Insufficient available balance. Available: ${state.user.availableBalance.toFixed(2)} USDT, Required: ${initialOrderMargin.toFixed(2)} USDT.`);
             return;
@@ -426,14 +434,19 @@ document.addEventListener('DOMContentLoaded', () => {
         Object.values(state.orders).forEach(order => {
             if (order.status !== 'NEW') return;
             
-            const fillPrice = order.side === 'BUY' ? state.ui.askPrice : state.ui.bidPrice; // Market fill price
-            if (order.type === 'LIMIT') {
-                if ((order.side === 'BUY' && state.ui.bidPrice >= order.price) ||
-                    (order.side === 'SELL' && state.ui.askPrice <= order.price)) {
-                    // Fill at order price for limit order if condition met
-                    executeFill(order, order.price, order.qty);
-                }
-            } else { // MARKET order
+            // Determine fill price based on order type and side
+            let fillPrice;
+            if (order.type === 'MARKET') {
+                fillPrice = (order.side === 'BUY') ? state.ui.askPrice : state.ui.bidPrice;
+            } else { // LIMIT order
+                fillPrice = order.price;
+            }
+
+            const shouldFill = (order.type === 'MARKET') ||
+                               (order.side === 'BUY' && state.ui.bidPrice >= order.price) || // Buy limit hits when current bid >= limit price
+                               (order.side === 'SELL' && state.ui.askPrice <= order.price); // Sell limit hits when current ask <= limit price
+            
+            if (shouldFill) {
                 executeFill(order, fillPrice, order.qty);
             }
         });
@@ -446,8 +459,8 @@ document.addEventListener('DOMContentLoaded', () => {
             alert(`Your account has been liquidated! Your wallet balance was ${state.user.walletBalance.toFixed(2)} USDT.`);
             
             // --- MVP Liquidation: Create market orders to close all positions ---
+            // For each open position, create a market order to close it
             Object.values(state.positions).forEach(pos => {
-                // Create a market order to close this position
                 const orderId = state.nextOrderId++;
                 const order = {
                     orderId, symbol: pos.symbol, type: 'MARKET', side: pos.side === 'LONG' ? 'SELL' : 'BUY', qty: pos.qty,
@@ -457,17 +470,20 @@ document.addEventListener('DOMContentLoaded', () => {
                     createdAt: new Date(),
                 };
                 state.orders[orderId] = order;
-                // These liquidation orders will be filled in the next tryFillOrders cycle.
             });
-
-            // The actual PnL and fee for these liquidation orders will be recorded through executeFill
-            // once they are processed in tryFillOrders. This aligns with the natural flow.
+            // These liquidation orders will be filled in the next tryFillOrders cycle.
+            // All positions will be effectively removed when their closing orders are filled.
+            // The walletBalance will naturally adjust via REALIZED_PNL and FEE from these fills.
             
-            // Simplified: Force-clear positions immediately for UI, but ledger reflects real PnL/Fee from fill
+            // Simplified: Force clear positions from state immediately for UI, but the ledger records the PnL/Fee from fills.
             state.positions = {}; 
 
-            // After all orders are processed, the walletBalance will reflect the actual loss
-            // No direct walletBalance = 0 manipulation here. It will be naturally adjusted.
+            // Record a liquidation fee/loss based on the walletBalance at time of liquidation
+            // This is a simplified approach, real exchanges have insurance funds etc.
+            addToLedger('LIQUIDATION_FEE', -state.user.walletBalance, { uid: state.user.uid, description: "Account full liquidation" });
+            
+            // After this, walletBalance will be adjusted by the above ledger entry.
+            // All other metrics will be recalculated by updateAccountMetrics().
             
             updateAccountMetrics(); // Recalculate everything after liquidation orders are created
         }
@@ -512,16 +528,12 @@ document.addEventListener('DOMContentLoaded', () => {
         setInterval(() => {
             state.ui.lastPrice = state.ui.currentPrice; // Save mark price
             
-            // Simulate bid/ask spread
             const baseChange = (Math.random() - 0.5) * 50; 
-            state.ui.currentPrice += baseChange; // markPrice
+            state.ui.currentPrice += baseChange; // markPrice (mid-price)
             if(state.ui.currentPrice <= 0) state.ui.currentPrice = 100;
 
-            const spread = 50 * (Math.random() * 0.5 + 0.5); // Random spread 25-75
-            state.ui.bidPrice = state.ui.currentPrice - spread / 2;
-            state.ui.askPrice = state.ui.currentPrice + spread / 2;
-            if (state.ui.bidPrice < 0) state.ui.bidPrice = 0; // Ensure non-negative prices
-            if (state.ui.askPrice < 0) state.ui.askPrice = 0;
+            // ✅ Update bid/ask based on currentPrice(=mid)
+            updateBidAskFromMid(state.ui.currentPrice);
             
             tryFillOrders();
             checkLiquidation(); 
@@ -530,6 +542,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- INITIALIZATION ---
+    // ✅ Initial call to set bid/ask
+    updateBidAskFromMid(state.ui.currentPrice); 
+    updateAccountMetrics(); // Initial calculation of equity/available
     renderAll();
     startSimulation();
     console.log('Script initialized and simulation started.');
