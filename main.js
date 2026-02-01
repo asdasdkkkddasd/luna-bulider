@@ -263,9 +263,9 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!order || !order.onBook) return;
 
         const lvl = findLevel(order.side, order.price);
-        if (!lvl) return; // Level might have disappeared due to book rebuild
-
-        lvl.userOrders = lvl.userOrders.filter(id => id !== order.orderId);
+        if (lvl && Array.isArray(lvl.userOrders)) { // Ensure lvl and userOrders exist
+            lvl.userOrders = lvl.userOrders.filter(id => id !== order.orderId);
+        }
         order.onBook = false;
     }
 
@@ -775,7 +775,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let best = null; // { orderId, dist }
         for (const [orderId, obj] of limitLines.entries()) {
             const order = state.orders[orderId];
-            if (!order || order.status !== 'NEW' && order.status !== 'PARTIAL') continue;
+            if (!order || (order.status !== 'NEW' && order.status !== 'PARTIAL')) continue;
             const ly = priceToY(order.price);
             if (ly == null) continue;
 
@@ -789,7 +789,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function clampTpSlToDirection(kind, price) {
         const pos = state.positions[SYMBOL];
-        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return price;
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return price; // No position or flat, no clamping
 
         const minDistance = TICK_SIZE; // Min distance from entry price
 
@@ -991,6 +991,7 @@ document.addEventListener('DOMContentLoaded', () => {
             lockedMarginAmount: initialOrderMargin, // Store the exact amount locked for this order
             createdAt: new Date(),
             onBook: false, // For limit orders, track if it's on the order book
+            reduceOnly: false, // Default
         };
         state.orders[orderId] = order;
 
