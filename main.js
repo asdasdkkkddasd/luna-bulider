@@ -15,6 +15,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const LEVEL_QTY_MAX = 0.08;
     const TICK_SIZE = 0.5; // Price increment/decrement for order book levels
 
+    // Liquidation constants
+    const LIQ_TRIGGER_MR = 1.00;     // MR >= 100%면 위험 상태
+    const LIQ_TARGET_MR  = 0.85;     // 강제청산 후 목표 MR (여유 있게)
+    const LIQ_STEP_FRAC  = 0.20;     // 한 번에 포지션의 20%씩 줄임
+    const LIQ_MAX_STEPS  = 6;        // 한 틱에서 최대 6번만(무한루프 방지)
+
     // --- SHARED TYPES (from user's prompt, adapted to JS) ---
     /** @typedef { "BUY" | "SELL" } Side */
     /** @typedef { "LONG" | "SHORT" | "FLAT" } PosSide */
@@ -364,29 +370,30 @@ document.addEventListener('DOMContentLoaded', () => {
         return mmTotal / equity; // 1.0 이상이면 위험(청산 트리거 근접/도달)
     }
 
+    // ✅ MVP용 “단일 포지션일 때만” 근사 청산가(크로스)
     function calcLiqPriceSingleCross(pos, walletBalance, mmr) {
         if (!pos || pos.qty <= 0 || pos.side === "FLAT") return null;
         const q = pos.qty;
         const e = pos.entryPrice;
-        const W = walletBalance;
+        const W = walletBalance; // walletBalance is used here (not equity)
         const r = mmr;
 
         let P;
         if (pos.side === "LONG") {
-            // (W + q*(P - e)) = q*P*r  => W + qP - qe = qPr => W - qe = qPr - qP => W - qe = qP(r - 1) => P = (W - qe) / (q*(r - 1))
-            // Original user formula: P = (q*e - W) / (q*(1 - r)) which is equivalent if r-1 != 1-r
-            // My formula derivation: P = (W - qe) / (q * (r - 1))
-            const denom = q * (r - 1); // Note: r-1 is negative here for normal MMR, so P = (W-qe)/(negative value)
-            if (Math.abs(denom) < 1e-12) return null;
+            // Derivation: W + q*(P - e) = q*P*r  => W - qe = qP(r - 1) => P = (W - qe) / (q*(r - 1))
+            const denom = q * (r - 1);
+            if (Math.abs(denom) < 1e-12) return null; // Avoid division by zero
             P = (W - q * e) / denom;
         } else { // SHORT
-            // (W + q*(e - P)) = q*P*r => W + qe - qP = qPr => W + qe = qPr + qP => W + qe = qP(r + 1) => P = (W + qe) / (q*(r + 1))
+            // Derivation: W + q*(e - P) = q*P*r => W + qe = qP(r + 1) => P = (W + qe) / (q*(r + 1))
             const denom = q * (r + 1);
-            if (Math.abs(denom) < 1e-12) return null;
+            if (Math.abs(denom) < 1e-12) return null; // Avoid division by zero
             P = (W + q * e) / denom;
         }
-        return Number.isFinite(P) ? P : null;
+        // Ensure price is finite and sensible (e.g., not negative)
+        return (Number.isFinite(P) && P > 0) ? P : null;
     }
+
 
     function calcPnLForTarget(pos, targetPrice) {
         if (!pos || pos.qty <= 0 || pos.side === "FLAT") return 0;
@@ -511,9 +518,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const pnlColor = uPnl >= 0 ? 'var(--price-up)' : 'var(--price-down)';
                 const mrColor =
-                    mr >= 1 ? 'var(--price-down)' :
-                    mr >= 0.7 ? 'var(--accent-color)' : // Use accent color for consistency
-                    'var(--text-primary)'; // Use general text color
+                    mr >= LIQ_TRIGGER_MR ? 'var(--price-down)' :
+                    mr >= (LIQ_TRIGGER_MR * 0.7) ? 'var(--accent-color)' :
+                    'var(--text-primary)'; // Use general text color for safe MR
 
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
@@ -1373,32 +1380,107 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- LIQUIDATION LOGIC ---
+    // Helper to place reduce-only market close orders for forced liquidation
+    function placeForcedReduceOnlyClose(symbol, qty, reason = "FORCED_LIQ") {
+        const pos = state.positions[symbol];
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return null;
+
+        // reduceOnly 방향
+        const side = (pos.side === "LONG") ? "SELL" : "BUY";
+
+        const orderId = state.nextOrderId++;
+        const order = {
+            orderId,
+            symbol,
+            type: "MARKET",
+            side,
+            qty: Math.min(qty, pos.qty), // Ensure we don't try to close more than available
+            price: state.ui.currentPrice, // Will be filled at bid/ask
+            filledQty: 0,
+            status: "NEW",
+            reduceOnly: true,
+            lockedMarginAmount: 0,
+            createdAt: new Date(),
+            reason,
+        };
+
+        state.orders[orderId] = order;
+        return orderId;
+    }
+
+    // Attempt partial deleveraging if margin ratio is too high
+    function runForcedDeleverageIfNeeded() {
+        // Only proceed if there's an open position to deleverage
+        const pos = state.positions[SYMBOL];
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return;
+
+        updateAccountMetrics(); // Ensure metrics are fresh
+        let mr = state.user.marginRatio ?? Infinity;
+
+        // If margin ratio is below trigger, no deleveraging needed
+        if (mr < LIQ_TRIGGER_MR) return;
+
+        console.warn(`[LIQ] MR high: ${(mr*100).toFixed(1)}% -> starting forced deleverage`);
+
+        for (let step = 0; step < LIQ_MAX_STEPS; step++) {
+            updateAccountMetrics(); // Recalculate MR after potential fills
+            mr = state.user.marginRatio ?? Infinity;
+
+            if (mr < LIQ_TARGET_MR) break; // Goal achieved, stop deleveraging
+
+            const currentPos = state.positions[SYMBOL]; // Get fresh position data
+            if (!currentPos || currentPos.qty <= 1e-12) break; // Position fully closed
+
+            const closeQty = Math.max(1e-6, currentPos.qty * LIQ_STEP_FRAC);
+
+            // Place a reduceOnly market order to close a fraction of the position
+            const oid = placeForcedReduceOnlyClose(SYMBOL, closeQty, "FORCED_LIQ");
+            if (!oid) break; // Failed to place order
+
+            // Immediately attempt to fill the newly placed market order
+            // This ensures deleveraging happens within the same tick
+            // We need to pass the specific order to tryFillOrders for immediate processing
+            // Simplified: tryFillOrders is called globally, so new orders are processed next.
+            // For a single tick effect, we'd need to process this specific order.
+            // For MVP, letting tryFillOrders handle it in next cycle is acceptable.
+            // If tryFillOrders was designed to process a specific order ID, we would call that.
+            // For now, it will be processed in the next main simulation loop.
+            tryFillOrders(); // This will process the newly created forced close order.
+
+            updateAccountMetrics(); // Recalculate metrics again after fill attempt
+        }
+        updateAccountMetrics(); // Final update after loop
+    }
+
     function checkLiquidation() {
-        // Cross liquidation trigger: equity <= maintenanceMarginTotal
-        if (Object.keys(state.positions).length > 0 && state.user.equity > 0 && state.user.equity <= state.user.maintenanceMarginTotal) {
-            console.warn(`ACCOUNT LIQUIDATED! Equity: ${state.user.equity.toFixed(2)}, Maintenance Margin Total: ${state.user.maintenanceMarginTotal.toFixed(2)}`);
-            alert(`Your account has been liquidated! Your wallet balance was ${state.user.walletBalance.toFixed(2)} USDT.`);
+        // 1) First, attempt partial deleveraging if needed
+        runForcedDeleverageIfNeeded();
+
+        // 2) If still risky (or equity near zero), perform final full liquidation
+        updateAccountMetrics();
+        const mr = state.user.marginRatio ?? Infinity;
+
+        // Final full liquidation if MR is very high or equity is exhausted
+        if (mr >= (LIQ_TRIGGER_MR * 1.2) || state.user.equity <= 0) { // e.g., MR >= 120%
+            const pos = state.positions[SYMBOL];
+            if (pos && pos.qty > 0) {
+                // Close remaining position fully
+                const oid = placeForcedReduceOnlyClose(SYMBOL, pos.qty, "FULL_LIQ");
+                if (oid) {
+                    tryFillOrders(); // Process this final closing order
+                    updateAccountMetrics();
+                }
+            }
+
+            // After all closing orders are processed, the walletBalance will naturally reflect the loss.
+            // We alert the user about the full liquidation.
+            alert('Liquidation: Your positions were force-closed. All capital has been lost or used to cover losses and fees.');
             
-            // --- MVP Liquidation: Create market orders to close all positions ---
-            // For each open position, create a market order to close it
-            Object.values(state.positions).forEach(pos => {
-                const orderId = state.nextOrderId++;
-                const order = {
-                    orderId, symbol: pos.symbol, type: 'MARKET', side: pos.side === 'LONG' ? 'SELL' : 'BUY', qty: pos.qty,
-                    price: pos.side === 'LONG' ? state.ui.bidPrice : state.ui.askPrice, // Market close uses current opposite bid/ask
-                    filledQty: 0, status: 'NEW', reduceOnly: true, 
-                    lockedMarginAmount: 0, 
-                    createdAt: new Date(),
-                };
-                state.orders[orderId] = order;
-            });
-            
-            state.positions = {}; // Force clear positions for immediate UI update. Ledger records will capture exact losses.
-            
-            // Record a liquidation fee/loss based on the walletBalance at time of liquidation
-            addToLedger('LIQUIDATION_FEE', -state.user.walletBalance, { uid: state.user.uid, description: "Account full liquidation" });
-            
-            updateAccountMetrics(); 
+            // For simplicity in MVP simulation, clear position and reset balances related to user capital here
+            // In a real system, ledger entries from full close would lead to correct final balance.
+            state.positions = {};
+            // Final balance will be correct after the force-close orders are filled and ledger updated
         }
     }
 
@@ -1454,10 +1536,10 @@ document.addEventListener('DOMContentLoaded', () => {
             updateBidAskFromMid(state.ui.currentPrice);
             rebuildOrderBookFromMid(state.ui.currentPrice);
 
-            checkTpSlTriggers();              // Check TP/SL conditions first
-            tryFillOrders();              // Process market orders
-            matchLimitOrdersAgainstPrice(); // Then check for limit order fills
-            checkLiquidation(); 
+            checkTpSlTriggers();              // Check TP/SL conditions and place close orders
+            tryFillOrders();                  // Process market orders (including TP/SL closes)
+            matchLimitOrdersAgainstPrice();   // Then check for limit order fills
+            checkLiquidation();               // Check for liquidation (partial deleverage/full liq)
             renderPrice(); // This calls updateAccountMetrics, renderOrders and renderPositions
         }, 1500);
     }
