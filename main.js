@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
             unrealizedPnlTotal: 0,
             maintenanceMarginTotal: 0,
             marginMode: "CROSS",
+            marginRatio: 0, // Added marginRatio to user state
             updatedAt: new Date(),
         },
         positions: {}, // Keyed by symbol, e.g., 'BTC-USDT' -> Position object
@@ -192,6 +193,9 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
         state.user.availableBalance = state.user.walletBalance - lockedByOrders;
+
+        // Calculate Margin Ratio
+        state.user.marginRatio = calcMarginRatio(state.user.maintenanceMarginTotal, state.user.equity);
     }
 
     // --- BID/ASK & ORDER BOOK CALCULATION ---
@@ -345,7 +349,45 @@ document.addEventListener('DOMContentLoaded', () => {
         return pos.side === "LONG" ? pos.qty * diff : pos.qty * (-diff);
     }
 
-    // --- UTILITY FUNCTIONS FOR DISPLAY ---
+    // --- UTILITY FUNCTIONS FOR DISPLAY (PnL, %s, RR, ROE) ---
+    function calcNotional(pos, markPrice) {
+        return Math.abs(pos.qty) * markPrice;
+    }
+
+    function calcInitialMargin(notional, lev) {
+        const L = (lev && lev > 0) ? lev : LEVERAGE;
+        return notional / L;
+    }
+
+    function calcMarginRatio(mmTotal, equity) {
+        if (!Number.isFinite(equity) || equity <= 1e-12) return Infinity; // Avoid division by zero/small equity
+        return mmTotal / equity; // 1.0 이상이면 위험(청산 트리거 근접/도달)
+    }
+
+    function calcLiqPriceSingleCross(pos, walletBalance, mmr) {
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return null;
+        const q = pos.qty;
+        const e = pos.entryPrice;
+        const W = walletBalance;
+        const r = mmr;
+
+        let P;
+        if (pos.side === "LONG") {
+            // (W + q*(P - e)) = q*P*r  => W + qP - qe = qPr => W - qe = qPr - qP => W - qe = qP(r - 1) => P = (W - qe) / (q*(r - 1))
+            // Original user formula: P = (q*e - W) / (q*(1 - r)) which is equivalent if r-1 != 1-r
+            // My formula derivation: P = (W - qe) / (q * (r - 1))
+            const denom = q * (r - 1); // Note: r-1 is negative here for normal MMR, so P = (W-qe)/(negative value)
+            if (Math.abs(denom) < 1e-12) return null;
+            P = (W - q * e) / denom;
+        } else { // SHORT
+            // (W + q*(e - P)) = q*P*r => W + qe - qP = qPr => W + qe = qPr + qP => W + qe = qP(r + 1) => P = (W + qe) / (q*(r + 1))
+            const denom = q * (r + 1);
+            if (Math.abs(denom) < 1e-12) return null;
+            P = (W + q * e) / denom;
+        }
+        return Number.isFinite(P) ? P : null;
+    }
+
     function calcPnLForTarget(pos, targetPrice) {
         if (!pos || pos.qty <= 0 || pos.side === "FLAT") return 0;
         if (pos.side === "LONG") return pos.qty * (targetPrice - pos.entryPrice);
@@ -376,7 +418,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!pos || pos.qty <= 0 || pos.entryPrice <= 0) return 0;
         const notional = pos.qty * pos.entryPrice;
         const lev = pos.leverage || LEVERAGE || 1;
-        const im = notional / lev; // Display purposes
+        const im = notional / lev; // 표시용
         if (im <= 1e-12) return 0;
         return (pnl / im) * 100;
     }
@@ -386,7 +428,10 @@ document.addEventListener('DOMContentLoaded', () => {
     function renderBalance() {
         try {
             if (balanceDisplayEl) {
-                balanceDisplayEl.innerText = `Wallet: ${state.user.walletBalance.toFixed(2)} | Avail: ${state.user.availableBalance.toFixed(2)} | Equity: ${state.user.equity.toFixed(2)} USDT`;
+                const mr = state.user.marginRatio ?? 0;
+                balanceDisplayEl.innerText =
+                    `Wallet: ${state.user.walletBalance.toFixed(2)} | Avail: ${state.user.availableBalance.toFixed(2)} | ` +
+                    `Equity: ${state.user.equity.toFixed(2)} | MR: ${(mr*100).toFixed(1)}%`;
             }
         } catch (error) {
             console.error("Error rendering balance:", error);
@@ -423,7 +468,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             orders.forEach(order => {
                 const tr = document.createElement('tr');
-                const color = order.side === 'BUY' ? 'var(--price-up)' : 'var(--price-down)';
+                const color = (order.side === 'BUY') ? 'var(--price-up)' : 'var(--price-down)';
                 tr.innerHTML = `
                     <td style="color: ${color}">${order.type} ${order.side}</td>
                     <td>${order.price.toFixed(2)}</td>
@@ -445,19 +490,43 @@ document.addEventListener('DOMContentLoaded', () => {
 
             positionsBodyEl.innerHTML = '';
             if (positions.length === 0) {
-                positionsBodyEl.innerHTML = `<tr><td colspan="5" style="text-align:center; color: var(--text-secondary);">No open positions.</td></tr>`; 
+                positionsBodyEl.innerHTML = `<tr><td colspan="11" style="text-align:center; color: var(--text-secondary);">No open positions.</td></tr>`;
                 return;
             }
+
+            const single = positions.length === 1;
+
             positions.forEach(pos => {
-                // unrealizedPnl is already updated in updateAccountMetrics
-                const pnlColor = pos.unrealizedPnl >= 0 ? 'var(--price-up)' : 'var(--price-down)';
+                const mark = state.ui.currentPrice;
+                const uPnl = pos.unrealizedPnl ?? calcUnrealizedPnl(pos, mark);
+
+                const notional = calcNotional(pos, mark);
+                const im = calcInitialMargin(notional, pos.leverage || LEVERAGE);
+                const mm = notional * MMR;
+
+                const mr = state.user.marginRatio ?? calcMarginRatio(state.user.maintenanceMarginTotal, state.user.equity);
+                const mrPct = (mr * 100);
+
+                const liq = single ? calcLiqPriceSingleCross(pos, state.user.walletBalance, MMR) : null;
+
+                const pnlColor = uPnl >= 0 ? 'var(--price-up)' : 'var(--price-down)';
+                const mrColor =
+                    mr >= 1 ? 'var(--price-down)' :
+                    mr >= 0.7 ? 'var(--accent-color)' : // Use accent color for consistency
+                    'var(--text-primary)'; // Use general text color
+
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td style="color: ${pos.side === 'LONG' ? 'var(--price-up)' : 'var(--price-down)'}">${pos.side}</td>
+                    <td style="color:${pos.side === 'LONG' ? 'var(--price-up)' : 'var(--price-down)'}">${pos.side}</td>
                     <td>${pos.entryPrice.toFixed(2)}</td>
-                    <td>${state.ui.currentPrice.toFixed(2)}</td>
-                    <td>${pos.qty}</td>
-                    <td style="color: ${pnlColor}">${pos.unrealizedPnl.toFixed(2)}</td>
+                    <td>${mark.toFixed(2)}</td>
+                    <td>${pos.qty.toFixed(4)}</td>
+                    <td style="color:${pnlColor}">${uPnl.toFixed(2)}</td>
+                    <td>${notional.toFixed(2)}</td>
+                    <td>${im.toFixed(2)}</td>
+                    <td>${mm.toFixed(2)}</td>
+                    <td style="color:${mrColor}">${mrPct.toFixed(1)}%</td>
+                    <td>${liq == null ? '-' : liq.toFixed(2)}</td>
                     <td><button class="close-btn" data-symbol="${pos.symbol}">Close</button></td>
                 `;
                 positionsBodyEl.appendChild(tr);
@@ -1293,8 +1362,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (remaining <= 1e-12) return;
 
             const shouldFill =
-                (order.side === 'BUY' && state.ui.bidPrice >= order.price) || // Buy limit hits when current bid >= limit price
-                (order.side === 'SELL' && state.ui.askPrice <= order.price); // Sell limit hits when current ask <= limit price
+                (order.side === 'BUY') ? (state.ui.bidPrice >= order.price) : // Buy limit hits when current bid >= limit price
+                (state.ui.askPrice <= order.price); // Sell limit hits when current ask <= limit price
 
             if (shouldFill) {
                 // Limit orders that are hit by market price are considered Taker orders
