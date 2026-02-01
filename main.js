@@ -345,6 +345,42 @@ document.addEventListener('DOMContentLoaded', () => {
         return pos.side === "LONG" ? pos.qty * diff : pos.qty * (-diff);
     }
 
+    // --- UTILITY FUNCTIONS FOR DISPLAY ---
+    function calcPnLForTarget(pos, targetPrice) {
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return 0;
+        if (pos.side === "LONG") return pos.qty * (targetPrice - pos.entryPrice);
+        return pos.qty * (pos.entryPrice - targetPrice); // SHORT
+    }
+
+    function calcPctFromEntry(pos, targetPrice) {
+        if (!pos || pos.entryPrice <= 0) return 0;
+        const diff = (pos.side === "LONG")
+            ? (targetPrice - pos.entryPrice)
+            : (pos.entryPrice - targetPrice);
+        return (diff / pos.entryPrice) * 100;
+    }
+
+    function fmtSigned(n, digits=2) {
+        const s = (n >= 0 ? "+" : "");
+        return s + n.toFixed(digits);
+    }
+
+    function calcRR(pos, tpPrice, slPrice) {
+        const reward = Math.abs(calcPnLForTarget(pos, tpPrice));
+        const risk   = Math.abs(calcPnLForTarget(pos, slPrice));
+        if (risk <= 1e-12) return null;
+        return reward / risk;
+    }
+
+    function calcRoePct(pos, pnl) {
+        if (!pos || pos.qty <= 0 || pos.entryPrice <= 0) return 0;
+        const notional = pos.qty * pos.entryPrice;
+        const lev = pos.leverage || LEVERAGE || 1;
+        const im = notional / lev; // Display purposes
+        if (im <= 1e-12) return 0;
+        return (pnl / im) * 100;
+    }
+
 
     // --- RENDER FUNCTIONS ---
     function renderBalance() {
@@ -695,9 +731,35 @@ document.addEventListener('DOMContentLoaded', () => {
         const ty = priceToY(state.ui.tpPrice);
         const sy = priceToY(state.ui.slPrice);
 
-        if (ey != null) setTag(entryTag, ey, `ENTRY ${pos.entryPrice.toFixed(2)}`); else hideTag(entryTag);
-        if (ty != null) setTag(tpTag, ty, `TP ${state.ui.tpPrice.toFixed(2)}`); else hideTag(tpTag);
-        if (sy != null) setTag(slTag, sy, `SL ${state.ui.slPrice.toFixed(2)}`); else hideTag(slTag);
+        // --- TP/SL 예상 손익 계산 ---
+        const tpPnl = calcPnLForTarget(pos, state.ui.tpPrice);
+        const slPnl = calcPnLForTarget(pos, state.ui.slPrice);
+
+        const tpPct = calcPctFromEntry(pos, state.ui.tpPrice);
+        const slPct = calcPctFromEntry(pos, state.ui.slPrice);
+
+        const rr = calcRR(pos, state.ui.tpPrice, state.ui.slPrice);
+        const rrText = (rr == null) ? "RR -" : `RR ${rr.toFixed(2)}`;
+
+        // (선택) ROE
+        const tpRoe = calcRoePct(pos, tpPnl);
+        const slRoe = calcRoePct(pos, slPnl);
+
+        if (ey != null) setTag(entryTag, ey, `ENTRY ${pos.entryPrice.toFixed(2)} (${pos.qty.toFixed(4)})`); else hideTag(entryTag);
+        if (ty != null) {
+            setTag(
+                tpTag,
+                ty,
+                `TP ${state.ui.tpPrice.toFixed(2)}  ${fmtSigned(tpPnl,2)} USDT (${fmtSigned(tpPct,2)}%)  ${rrText}  ROE ${fmtSigned(tpRoe,1)}%`
+            );
+        } else hideTag(tpTag);
+        if (sy != null) {
+            setTag(
+                slTag,
+                sy,
+                `SL ${state.ui.slPrice.toFixed(2)}  ${fmtSigned(slPnl,2)} USDT (${fmtSigned(slPct,2)}%)  ${rrText}  ROE ${fmtSigned(slRoe,1)}%`
+            );
+        } else hideTag(slTag);
     }
 
     // Sync chart lines for open LIMIT orders
@@ -960,6 +1022,174 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
     // --- CORE TRADING LOGIC ---
+    // Helper to enforce reduceOnly behavior (prevents position reversal)
+    function getExposureSide(pos) {
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return "FLAT";
+        return pos.side; // "LONG" | "SHORT"
+    }
+
+    function clampFillQtyForReduceOnly(symbol, orderSide, desiredQty) {
+        const pos = state.positions[symbol];
+        if (!pos || pos.qty <= 0 || pos.side === "FLAT") return 0;
+
+        // LONG is reduced by SELL, SHORT by BUY
+        const isReducingSide = (pos.side === "LONG" && orderSide === "SELL") ||
+                               (pos.side === "SHORT" && orderSide === "BUY");
+
+        if (!isReducingSide) return 0; // Order would reverse or add to existing, not reduce
+
+        return Math.min(desiredQty, pos.qty); // Cannot close more than current position qty
+    }
+
+    /**
+     * Executes a single fill for an order.
+     * @param {object} order - The order object.
+     * @param {number} fillPrice - The price at which to fill.
+     * @param {number} fillQty - The quantity to fill.
+     * @param {number} feeRate - Maker or Taker fee rate.
+     */
+    function executeFill(order, fillPrice, fillQty, feeRate) {
+        // ✅ reduceOnly 보호 - Clamp fillQty for reduceOnly orders
+        if (order.reduceOnly) {
+            const clamped = clampFillQtyForReduceOnly(order.symbol, order.side, fillQty);
+            if (clamped <= 1e-12) return; // No valid quantity to fill
+            fillQty = clamped;
+        }
+
+        const tradeId = state.nextTradeId++;
+
+        const currentPosition = state.positions[order.symbol] || { side: "FLAT", qty: 0, entryPrice: 0, status: "CLOSED" };
+        const fill = { side: /** @type {Side} */(order.side), qty: fillQty, price: fillPrice };
+        const { pos: updatedPosition, realizedPnl } = applyFillNet(currentPosition, fill);
+
+        if (realizedPnl !== 0) addToLedger('REALIZED_PNL', realizedPnl, { orderId: order.orderId, tradeId, symbol: order.symbol });
+
+        const fee = Math.abs(fillPrice * fillQty) * feeRate;
+        if (fee !== 0) addToLedger('FEE', -fee, { orderId: order.orderId, tradeId, symbol: order.symbol });
+
+        if (updatedPosition.qty === 0 || updatedPosition.side === "FLAT") {
+            delete state.positions[order.symbol];
+        } else {
+            state.positions[order.symbol] = {
+                ...updatedPosition,
+                symbol: order.symbol,
+                leverage: LEVERAGE,
+                marginMode: 'CROSS',
+                status: 'OPEN',
+                updatedAt: new Date(),
+            };
+        }
+
+        order.filledQty += fillQty;
+        if (order.filledQty + 1e-12 >= order.qty) { // Add a small epsilon for floating point comparison
+            order.filledQty = order.qty; // Ensure it's exactly qty
+            order.status = 'FILLED';
+        } else {
+            order.status = 'PARTIAL';
+        }
+
+        // Check if this fill completes a TP/SL triggered order
+        if (order.status === 'FILLED' && order.orderId === state.ui.tpSl?.activeCloseOrderId) {
+            state.ui.tpSl.activeCloseOrderId = null; // Clear trigger state
+        }
+        
+        pushTape(order.side, fillPrice, fillQty);
+    }
+
+    /**
+     * Fills maker orders at a specific order book level with a taker order.
+     * @param {object} level - The order book level object.
+     * @param {object} takerOrder - The market order (taker) attempting to fill.
+     * @param {number} remainingTakerQty - Remaining quantity of the taker order.
+     * @returns {number} - Remaining quantity of the taker order after filling makers.
+     */
+    function fillMakersAtLevel(level, takerOrder, remainingTakerQty) {
+        if (!level.userOrders || level.userOrders.length === 0) return remainingTakerQty;
+
+        // Use a copy of IDs as makers might be removed during fill
+        const makerOrderIds = [...level.userOrders]; 
+
+        for (const makerOrderId of makerOrderIds) {
+            if (remainingTakerQty <= 1e-12) break; // Taker order is fully filled
+
+            const makerOrder = state.orders[makerOrderId];
+            if (!makerOrder) {
+                // Maker order no longer exists (e.g., cancelled). Remove from level.userOrders later.
+                continue; 
+            }
+
+            // Only consider NEW/PARTIAL LIMIT orders as makers
+            if (makerOrder.type !== 'LIMIT' || (makerOrder.status !== 'NEW' && makerOrder.status !== 'PARTIAL')) {
+                continue;
+            }
+
+            const makerRemaining = makerOrder.qty - makerOrder.filledQty;
+            if (makerRemaining <= 1e-12) {
+                continue; // Maker order is already filled
+            }
+            
+            // Fill quantity is limited by remaining taker and maker quantities
+            const fillQty = Math.min(remainingTakerQty, makerRemaining);
+
+            // Execute fill for both maker and taker sides
+            executeFill(makerOrder, level.price, fillQty, MAKER_FEE_RATE); // Maker gets maker fee
+            executeFill(takerOrder, level.price, fillQty, TAKER_FEE_RATE); // Taker pays taker fee
+
+            remainingTakerQty -= fillQty;
+
+            // If maker is filled, it will be removed from book via removeOrderFromBook when status is FILLED
+        }
+
+        // After iteration, clean up level.userOrders by removing any filled/cancelled orders
+        level.userOrders = level.userOrders.filter(id => {
+            const o = state.orders[id];
+            return o && (o.status === 'NEW' || o.status === 'PARTIAL');
+        });
+
+        return remainingTakerQty;
+    }
+
+    /**
+     * Matches a market order against the order book, handling partial fills.
+     * This version prioritizes user's limit orders (makers) before synthetic liquidity.
+     * @param {object} order - The market order object.
+     */
+    function fillMarketOrderUsingBook(order) {
+        let remainingTakerQty = order.qty - order.filledQty;
+        if (remainingTakerQty <= 1e-12) return; // Taker order is already filled
+
+        const levels = (order.side === 'BUY') ? state.orderBook.asks : state.orderBook.bids;
+        // Sort levels by price for consistent filling
+        levels.sort((a, b) => (order.side === 'BUY' ? a.price - b.price : b.price - a.price));
+
+        for (let i = 0; i < levels.length && remainingTakerQty > 1e-12; i++) {
+            const lvl = levels[i];
+
+            // 1) ✅ Fill user's LIMIT orders (makers) at this level first
+            remainingTakerQty = fillMakersAtLevel(lvl, order, remainingTakerQty);
+
+            if (remainingTakerQty <= 1e-12) break; // Taker order fully filled
+
+            // 2) Then consume synthetic liquidity (taker pays taker fee)
+            if (lvl.qty > 1e-12) { // Check if synthetic liquidity exists
+                const fillQty = Math.min(remainingTakerQty, lvl.qty);
+                const fillPrice = lvl.price;
+
+                executeFill(order, fillPrice, fillQty, TAKER_FEE_RATE); // Taker pays taker fee
+
+                lvl.qty = +(lvl.qty - fillQty).toFixed(4); // Reduce order book synthetic quantity
+                remainingTakerQty -= fillQty;
+            }
+        }
+
+        // If after trying to fill, order is still NEW/PARTIAL but not fully filled
+        if (order.status !== 'FILLED' && order.filledQty > 0) {
+            console.log(`Market order ${order.orderId} partially filled. Remaining: ${remainingTakerQty.toFixed(4)}`);
+        }
+    }
+
+
+    // --- CORE TRADING LOGIC ---
     function placeOrder(side) {
         const type = state.ui.orderType.toUpperCase();
         // Use bid/ask for market orders
@@ -1134,8 +1364,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (e.target.classList.contains('close-btn')) {
                 closePosition(e.target.dataset.symbol);
             }
-        });
-    }
+        }
+    );
 
     // Attach order book click handler
     attachOrderBookClick();
