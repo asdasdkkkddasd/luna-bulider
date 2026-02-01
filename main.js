@@ -21,6 +21,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const LIQ_STEP_FRAC  = 0.20;     // 한 번에 포지션의 20%씩 줄임
     const LIQ_MAX_STEPS  = 6;        // 한 틱에서 최대 6번만(무한루프 방지)
 
+    // Funding constants
+    const FUNDING_INTERVAL_MS = 60 * 1000;   // ✅ MVP: 1분마다(실전은 8시간)
+    const FUNDING_RATE = 0.0001;             // ✅ 0.01% (원하면 0.00005~0.0003)
+
+
     // --- SHARED TYPES (from user's prompt, adapted to JS) ---
     /** @typedef { "BUY" | "SELL" } Side */
     /** @typedef { "LONG" | "SHORT" | "FLAT" } PosSide */
@@ -84,6 +89,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 activeCloseOrderId: null, // ID of the market order created by TP/SL trigger
                 lastTrigger: null,        // "TP" | "SL" | null
             },
+            funding: { // Funding state
+                nextTs: Date.now() + FUNDING_INTERVAL_MS,
+                lastPaid: null,           // { ts, amount, side } 저장용
+            },
         },
         
         // --- Sequence for IDs ---
@@ -96,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const bidPriceEl = document.getElementById('bid-price');
     const askPriceEl = document.getElementById('ask-price');
     const balanceDisplayEl = document.getElementById('balance-display');
+    const fundingDisplayEl = document.getElementById('funding-display'); // New
     const ordersBodyEl = document.getElementById('orders-body');
     const positionsBodyEl = document.getElementById('positions-body');
     const buyBtn = document.getElementById('buy-btn');
@@ -113,7 +123,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const overlayEl = document.getElementById('chart-overlay');
 
 
-    console.log('DOM Elements obtained:', { bidPriceEl, askPriceEl, balanceDisplayEl, ordersBodyEl, positionsBodyEl, buyBtn, sellBtn, priceInput, quantityInput, limitOrderInputs, tabs, asksBodyEl, bidsBodyEl, tapeBodyEl, chartEl, overlayEl });
+    console.log('DOM Elements obtained:', { bidPriceEl, askPriceEl, balanceDisplayEl, fundingDisplayEl, ordersBodyEl, positionsBodyEl, buyBtn, sellBtn, priceInput, quantityInput, limitOrderInputs, tabs, asksBodyEl, bidsBodyEl, tapeBodyEl, chartEl, overlayEl });
 
     // --- CHART INITIALIZATION ---
     let chart, candleSeries;
@@ -145,7 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- LEDGER & ACCOUNT METRICS LOGIC ---
     /**
      * Adds an entry to the ledger and updates walletBalance.
-     * @param {"FEE" | "REALIZED_PNL" | "DEPOSIT" | "WITHDRAW" | "LIQUIDATION_FEE"} type
+     * @param {"FEE" | "REALIZED_PNL" | "DEPOSIT" | "WITHDRAW" | "LIQUIDATION_FEE" | "FUNDING"} type
      * @param {number} deltaWalletBalance
      * @param {object} ref
      */
@@ -385,7 +395,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (Math.abs(denom) < 1e-12) return null; // Avoid division by zero
             P = (W - q * e) / denom;
         } else { // SHORT
-            // Derivation: W + q*(e - P) = q*P*r => W + qe = qP(r + 1) => P = (W + qe) / (q*(r + 1))
+            // Derivation: W + q*(e - P) = q*P*r => W + qe = qP(r + 1) => P = (W + qe) = qP(r + 1) => P = (W + qe) / (q*(r + 1))
             const denom = q * (r + 1);
             if (Math.abs(denom) < 1e-12) return null; // Avoid division by zero
             P = (W + q * e) / denom;
@@ -458,6 +468,7 @@ document.addEventListener('DOMContentLoaded', () => {
             renderTape(); // Render trade tape with new data
             syncPositionLines(); // Update chart lines (ENTRY, TP, SL)
             syncLimitOrderLines(); // Update chart lines for LIMIT orders
+            renderFunding(); // Render funding countdown
         } catch (error) {
             console.error("Error rendering price:", error);
         }
@@ -1442,9 +1453,7 @@ document.addEventListener('DOMContentLoaded', () => {
             // This ensures deleveraging happens within the same tick
             // We need to pass the specific order to tryFillOrders for immediate processing
             // Simplified: tryFillOrders is called globally, so new orders are processed next.
-            // For a single tick effect, we'd need to process this specific order.
-            // For MVP, letting tryFillOrders handle it in next cycle is acceptable.
-            // If tryFillOrders was designed to process a specific order ID, we would call that.
+            // For a single tick effect, we'd need to process a specific order by its ID.
             // For now, it will be processed in the next main simulation loop.
             tryFillOrders(); // This will process the newly created forced close order.
 
@@ -1536,9 +1545,10 @@ document.addEventListener('DOMContentLoaded', () => {
             updateBidAskFromMid(state.ui.currentPrice);
             rebuildOrderBookFromMid(state.ui.currentPrice);
 
-            checkTpSlTriggers();              // Check TP/SL conditions and place close orders
-            tryFillOrders();                  // Process market orders (including TP/SL closes)
-            matchLimitOrdersAgainstPrice();   // Then check for limit order fills
+            applyFundingIfDue();              // ✅ Apply funding payments if due
+            checkTpSlTriggers();              // Check TP/SL conditions first
+            tryFillOrders();                  // Process market orders
+            matchLimitOrdersAgainstPrice(); // Then check for limit order fills
             checkLiquidation();               // Check for liquidation (partial deleverage/full liq)
             renderPrice(); // This calls updateAccountMetrics, renderOrders and renderPositions
         }, 1500);
